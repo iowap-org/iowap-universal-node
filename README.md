@@ -11,6 +11,38 @@ HTTP; both sides share a workspace directory for artifact hand-off.
 
 **Status: private until first release.**
 
+## Startup flow
+
+1. **Config** — `IOWAP_BRIDGE_TOKEN` is required; the daemon fails closed
+   without it (SPEC §2).
+2. **Bootstrap** — the daemon checks the Docker Engine (`client.FromEnv`:
+   Windows named pipe / unix socket). Unreachable → actionable error
+   ("install or start Docker Desktop") and exit 1. If the
+   `iowap-universal-node` container is not already running, the daemon
+   brings it up by executing the **vendored iowap-docker compose profile**
+   (`internal/bootstrap/docker-compose.universal-node.yml`, provenance-marked
+   — the profile file is the single source of truth, board DEC #7) via
+   `docker compose -f <file> up -d`, injecting `IOWAP_BRIDGE_TOKEN`,
+   `IOWAP_MCP_BEARER` (daemon-generated) and `IOWAP_WORKSPACE_DIR`.
+3. **Onboarding UI** on `127.0.0.1:7782` — container status, node
+   registration form (server field pre-filled from the container's
+   `iowap-cli --json relay discover` mDNS lookup; submit runs
+   `iowap-cli --json node register <server> --name <name>` inside the
+   container).
+4. **MCP bearer display (one-time)** — after a bootstrap the UI shows the
+   generated `iw_mcp_…` bearer exactly once, together with ready-made agent
+   config snippets (Hermes, Claude Desktop/Code, Codex, generic curl probe).
+   Afterwards the daemon keeps only the SHA-256 hash; rotation = container
+   recreate. A daemon restart that finds the container already running
+   never shows a bearer.
+5. **Bridge API** on `127.0.0.1:7780` (below).
+
+| Port  | Purpose                                        | Binding     |
+|-------|------------------------------------------------|-------------|
+| 7780  | Bridge manifest/exec API (node → daemon)       | 127.0.0.1   |
+| 7781  | HTTP MCP endpoint (agents → node container)    | 127.0.0.1   |
+| 7782  | Onboarding web UI (browser, this host)         | 127.0.0.1   |
+
 ## Build & Run
 
 Requires Go 1.23+ (or Docker: `docker run --rm -v "$PWD":/app -w /app golang:1.23 go build ./cmd/iowap-bridge`).
@@ -28,6 +60,8 @@ go run ./cmd/iowap-bridge
 | `IOWAP_WORKSPACE_DIR`  | no       | `./workspace`             | Workspace root; must be the same directory the node container mounts at `/workspace`. |
 | `IOWAP_COMFYUI_URL`    | no       | `http://127.0.0.1:8188`   | ComfyUI base URL.                                                  |
 | `IOWAP_COMFYUI_CMD`    | no       | —                         | Optional command to (re)start ComfyUI when a health probe fails. The daemon launches it and waits for the server to become healthy. |
+| `IOWAP_UI_PORT`        | no       | `7782`                    | Port of the onboarding web UI (loopback only).                       |
+| `IOWAP_MCP_PORT`       | no       | `7781`                    | MCP endpoint port shown in the UI snippets (the real mapping lives in the compose profile). |
 
 ## Endpoints
 
