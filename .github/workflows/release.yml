@@ -37,3 +37,46 @@ jobs:
           files: |
             iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
             iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}.sha256
+
+  nextcloud-sync:
+    # Auto-delivery: mirror the release binaries into the user's Nextcloud
+    # (Shared/iowap-bridge/) so the latest exe is always downloadable without
+    # a manual copy step. Stable paths, plain PUT overwrites.
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          for a in iowap-bridge-windows-amd64.exe iowap-bridge-windows-amd64.exe.sha256 \
+                   iowap-bridge-linux-amd64 iowap-bridge-linux-amd64.sha256; do
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}/assets" --paginate \
+              | jq -r --arg n "$a" '.[] | select(.name == $n) | .url' \
+              | head -1 | xargs -r -I{} curl -sL -H "Authorization: token ${GH_TOKEN}" \
+                  -H "Accept: application/octet-stream" -o "dist/$a" {}
+          done
+          ls -la dist/
+      - name: Upload to Nextcloud (Shared/iowap-bridge/)
+        env:
+          NC_HOST: ${{ secrets.NEXTCLOUD_HOST }}
+          NC_USER: ${{ secrets.NEXTCLOUD_USERNAME }}
+          NC_PASS: ${{ secrets.NEXTCLOUD_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BASE="https://${NC_HOST#/https://}"
+          curl -s -o /dev/null -u "${NC_USER}:${NC_PASS}" -X MKCOL \
+            "${BASE}/remote.php/dav/files/${NC_USER}/Shared/iowap-bridge" || true
+          for f in dist/*; do
+            name="$(basename "$f")"
+            code="$(curl -s -o /dev/null -w '%{http_code}' -u "${NC_USER}:${NC_PASS}" \
+              -T "$f" "${BASE}/remote.php/dav/files/${NC_USER}/Shared/iowap-bridge/${name}")"
+            echo "${name} -> ${code}"
+            [ "$code" = "201" ] || [ "$code" = "204" ]
+          done
+          printf '%s\n' "${GITHUB_REF_NAME}" | curl -s -o /dev/null -w 'VERSION.txt -> %{http_code}\n' \
+            -u "${NC_USER}:${NC_PASS}" -T - \
+            "${BASE}/remote.php/dav/files/${NC_USER}/Shared/iowap-bridge/VERSION.txt"
