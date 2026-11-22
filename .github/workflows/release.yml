@@ -67,7 +67,8 @@ jobs:
           NC_PASS: ${{ secrets.NEXTCLOUD_PASSWORD }}
         run: |
           set -euo pipefail
-          BASE="https://${NC_HOST#/https://}"
+          # NC_HOST may or may not carry a scheme — strip any, re-add one.
+          BASE="https://${NC_HOST#*//}"
           curl -s -o /dev/null -u "${NC_USER}:${NC_PASS}" -X MKCOL \
             "${BASE}/remote.php/dav/files/${NC_USER}/Shared/iowap-bridge" || true
           for f in dist/*; do
