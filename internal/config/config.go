@@ -9,34 +9,46 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
-	"strings"
 )
 
 // Default values (SPEC §4 / task T-006).
 const (
 	DefaultPort         = 7780
 	DefaultWorkspaceDir = "./workspace"
-	DefaultComfyUIURL   = "http://127.0.0.1:8188"
+	// ProvidersFileName is the providers registry looked up in the config
+	// dir when IOWAP_PROVIDERS_FILE is unset (board T-019).
+	ProvidersFileName = "providers.yaml"
 	// BindHost is fixed: the daemon never binds a foreign interface (SPEC §2).
 	BindHost = "127.0.0.1"
 )
 
+// DefaultProvidersFile returns the default providers registry path:
+// <configdir>/iowap-bridge/providers.yaml (Windows: %AppData%,
+// Linux: ~/.config). Falls back to the current directory when no user
+// config dir exists.
+func DefaultProvidersFile() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || dir == "" {
+		return ProvidersFileName
+	}
+	return filepath.Join(dir, "iowap-bridge", ProvidersFileName)
+}
+
 // Config is the resolved daemon configuration.
 type Config struct {
-	Port         int
-	WorkspaceDir string
-	ComfyUIURL   string
-	ComfyUICmd   string // optional command to (re)start ComfyUI on failed health probes
+	Port          int
+	WorkspaceDir  string
+	ProvidersFile string // provider registry (board T-019)
 }
 
 // Load reads the environment via the given getter (injected for tests).
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		Port:         DefaultPort,
-		WorkspaceDir: DefaultWorkspaceDir,
-		ComfyUIURL:   DefaultComfyUIURL,
-		ComfyUICmd:   getenv("IOWAP_COMFYUI_CMD"),
+		Port:          DefaultPort,
+		WorkspaceDir:  DefaultWorkspaceDir,
+		ProvidersFile: DefaultProvidersFile(),
 	}
 	if v := getenv("IOWAP_BRIDGE_PORT"); v != "" {
 		port, err := strconv.Atoi(v)
@@ -48,8 +60,8 @@ func Load(getenv func(string) string) (Config, error) {
 	if v := getenv("IOWAP_WORKSPACE_DIR"); v != "" {
 		cfg.WorkspaceDir = v
 	}
-	if v := getenv("IOWAP_COMFYUI_URL"); v != "" {
-		cfg.ComfyUIURL = strings.TrimRight(v, "/")
+	if v := getenv("IOWAP_PROVIDERS_FILE"); v != "" {
+		cfg.ProvidersFile = v
 	}
 	return cfg, nil
 }

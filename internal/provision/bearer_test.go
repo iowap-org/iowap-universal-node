@@ -54,4 +54,3 @@ func TestGenerateBridgeToken(t *testing.T) {
 		t.Fatal("bridge token must not collide with the MCP bearer prefix")
 	}
 }
-

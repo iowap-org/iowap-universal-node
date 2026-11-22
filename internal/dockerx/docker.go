@@ -97,5 +97,3 @@ func (c *Client) lookupContainer(ctx context.Context, name string) (*types.Conta
 	}
 	return nil, false, nil
 }
-
-

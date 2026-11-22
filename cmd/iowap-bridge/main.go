@@ -26,8 +26,9 @@ import (
 	"github.com/iowap-org/iowap-bridge-daemon/internal/config"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/dockerx"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/openbrowser"
-	"github.com/iowap-org/iowap-bridge-daemon/internal/provider/comfyui"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/provider"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provision"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/registry"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/server"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/tokenres"
 )
@@ -112,15 +113,28 @@ func main() {
 		log.Printf("iowap-bridge: open %s in your browser to register the node (bearer and config snippets are shown there as well)", onboardingURL)
 	}
 
-	// ── Bridge contract server (T-006/T-007/T-019).
-	comfy := comfyui.New(cfg.ComfyUIURL, cfg.ComfyUICmd)
+	// ── Provider registry (T-019): providers.yaml instantiates the
+	// capability sources (comfyui/http/process). Missing or empty file →
+	// empty manifest, never a crash; a broken file refuses to start.
+	provs, err := registry.Load(cfg.ProvidersFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "iowap-bridge: %v\n", err)
+		os.Exit(1)
+	}
+	if len(provs) == 0 {
+		log.Printf("iowap-bridge: no providers configured (%s missing or empty) — serving an empty manifest", cfg.ProvidersFile)
+	}
 
-	// One synchronous probe up front so the manifest is accurate from
-	// the first poll; the background loop keeps it fresh (15 s cadence,
-	// start-on-demand when IOWAP_COMFYUI_CMD is configured).
-	comfy.ProbeOnce(ctx)
+	// One synchronous probe per provider up front so the manifest is
+	// accurate from the first poll; the background loops keep it fresh
+	// (15 s cadence, generalized health probing).
+	for _, p := range provs {
+		if hp, ok := p.(provider.HealthProber); ok {
+			hp.ProbeOnce(ctx)
+		}
+	}
 
-	srv := server.New(tokens.BridgeToken, workspace, comfy)
+	srv := server.New(tokens.BridgeToken, workspace, provs...)
 	srv.StartHealthLoops(ctx, 15*time.Second)
 
 	ln, err := net.Listen("tcp", cfg.BindAddr())
@@ -128,8 +142,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "iowap-bridge: cannot listen on %s: %v\n", cfg.BindAddr(), err)
 		os.Exit(1)
 	}
-	log.Printf("iowap-bridge %s listening on %s (loopback only), workspace %s, comfyui %s",
-		server.Version, cfg.BindAddr(), workspace, cfg.ComfyUIURL)
+	log.Printf("iowap-bridge %s listening on %s (loopback only), workspace %s, %d provider(s) from %s",
+		server.Version, cfg.BindAddr(), workspace, len(provs), cfg.ProvidersFile)
 	if err := http.Serve(ln, srv.Handler()); err != nil {
 		log.Fatalf("iowap-bridge: server error: %v", err)
 	}

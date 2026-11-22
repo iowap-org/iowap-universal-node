@@ -2,6 +2,7 @@ package config
 
 import (
 	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -22,11 +23,10 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.WorkspaceDir != "./workspace" {
 		t.Errorf("WorkspaceDir = %q, want ./workspace", cfg.WorkspaceDir)
 	}
-	if cfg.ComfyUIURL != "http://127.0.0.1:8188" {
-		t.Errorf("ComfyUIURL = %q", cfg.ComfyUIURL)
-	}
-	if cfg.ComfyUICmd != "" {
-		t.Errorf("ComfyUICmd = %q, want empty", cfg.ComfyUICmd)
+	// The providers registry defaults into the user config dir (T-019);
+	// the path is platform-dependent, so only the file name is asserted.
+	if filepath.Base(cfg.ProvidersFile) != "providers.yaml" {
+		t.Errorf("ProvidersFile = %q", cfg.ProvidersFile)
 	}
 	if got := cfg.BindAddr(); got != "127.0.0.1:7780" {
 		t.Errorf("BindAddr = %q, want 127.0.0.1:7780", got)
@@ -35,17 +35,15 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadOverrides(t *testing.T) {
 	cfg, err := load(t, map[string]string{
-		"IOWAP_BRIDGE_TOKEN":  "t",
-		"IOWAP_BRIDGE_PORT":   "7781",
-		"IOWAP_WORKSPACE_DIR": "/data/ws",
-		"IOWAP_COMFYUI_URL":   "http://127.0.0.1:9999",
-		"IOWAP_COMFYUI_CMD":   "C:/comfy/run.bat",
+		"IOWAP_BRIDGE_TOKEN":   "t",
+		"IOWAP_BRIDGE_PORT":    "7781",
+		"IOWAP_WORKSPACE_DIR":  "/data/ws",
+		"IOWAP_PROVIDERS_FILE": "/etc/iowap/providers.yaml",
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Port != 7781 || cfg.WorkspaceDir != "/data/ws" ||
-		cfg.ComfyUIURL != "http://127.0.0.1:9999" || cfg.ComfyUICmd != "C:/comfy/run.bat" {
+	if cfg.Port != 7781 || cfg.WorkspaceDir != "/data/ws" || cfg.ProvidersFile != "/etc/iowap/providers.yaml" {
 		t.Errorf("overrides not applied: %+v", cfg)
 	}
 	if got := cfg.BindAddr(); got != "127.0.0.1:7781" {
