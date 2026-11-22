@@ -54,8 +54,8 @@ jobs:
           mkdir -p dist
           for a in iowap-bridge-windows-amd64.exe iowap-bridge-windows-amd64.exe.sha256 \
                    iowap-bridge-linux-amd64 iowap-bridge-linux-amd64.sha256; do
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}/assets" --paginate \
-              | jq -r --arg n "$a" '.[] | select(.name == $n) | .url' \
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --paginate \
+              | jq -r --arg n "$a" '.assets[] | select(.name == $n) | .url' \
               | head -1 | xargs -r -I{} curl -sL -H "Authorization: token ${GH_TOKEN}" \
                   -H "Accept: application/octet-stream" -o "dist/$a" {}
           done
