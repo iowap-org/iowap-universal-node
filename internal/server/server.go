@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provider"
@@ -31,7 +32,10 @@ const DefaultExecTimeout = 3600 * time.Second
 type Server struct {
 	token        string
 	workspaceDir string
+
+	mu           sync.RWMutex
 	providers    map[string]provider.Provider
+	healthCancel context.CancelFunc // cancels the current generation's health loops
 }
 
 // New builds a server. Providers are indexed by their capability name;
@@ -42,6 +46,13 @@ func New(token, workspaceDir string, providers ...provider.Provider) *Server {
 		workspaceDir: workspaceDir,
 		providers:    make(map[string]provider.Provider, len(providers)),
 	}
+	s.setProviders(providers)
+	return s
+}
+
+// setProviders indexes providers by capability name. Caller holds mu.
+func (s *Server) setProviders(providers []provider.Provider) {
+	s.providers = make(map[string]provider.Provider, len(providers))
 	for _, p := range providers {
 		capability := p.Capability()
 		if !provider.ValidCapName(capability.Name) {
@@ -54,13 +65,45 @@ func New(token, workspaceDir string, providers ...provider.Provider) *Server {
 		}
 		s.providers[capability.Name] = p
 	}
-	return s
 }
 
-// StartHealthLoops starts background health probing for every provider
-// that implements provider.HealthProber. Call once at startup.
-func (s *Server) StartHealthLoops(ctx context.Context, interval time.Duration) {
+// ReplaceProviders atomically swaps the served registry (board T-022,
+// workspace provider watch): the manifest and exec routing reflect the
+// new set immediately, and the previous generation's health loops are
+// stopped before the new ones start. Safe for concurrent requests.
+func (s *Server) ReplaceProviders(ctx context.Context, healthInterval time.Duration, providers ...provider.Provider) {
+	s.mu.Lock()
+	if s.healthCancel != nil {
+		s.healthCancel()
+	}
+	hctx, cancel := context.WithCancel(ctx)
+	s.healthCancel = cancel
+	s.setProviders(providers)
+	current := make([]provider.Provider, 0, len(s.providers))
 	for _, p := range s.providers {
+		current = append(current, p)
+	}
+	s.mu.Unlock()
+
+	for _, p := range current {
+		if hp, ok := p.(provider.HealthProber); ok {
+			hp.StartHealthLoop(hctx, healthInterval)
+		}
+	}
+}
+
+// StartHealthLoops is superseded by ReplaceProviders (board T-022): it
+// starts health probing for the current registry under the CALLER's
+// context (never canceled by later swaps). Kept for direct consumers that
+// do not participate in hot-reload.
+func (s *Server) StartHealthLoops(ctx context.Context, interval time.Duration) {
+	s.mu.RLock()
+	current := make([]provider.Provider, 0, len(s.providers))
+	for _, p := range s.providers {
+		current = append(current, p)
+	}
+	s.mu.RUnlock()
+	for _, p := range current {
 		if hp, ok := p.(provider.HealthProber); ok {
 			hp.StartHealthLoop(ctx, interval)
 		}
@@ -109,8 +152,15 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
-	capabilities := make([]map[string]any, 0, len(s.providers))
+	s.mu.RLock()
+	providers := make([]provider.Provider, 0, len(s.providers))
 	for _, p := range s.providers {
+		providers = append(providers, p)
+	}
+	s.mu.RUnlock()
+
+	capabilities := make([]map[string]any, 0, len(providers))
+	for _, p := range providers {
 		capability := p.Capability()
 		if capability.Health == "" {
 			capability.Health = provider.HealthOK
@@ -159,7 +209,9 @@ func failedBody(code, message string, retryable bool) map[string]any {
 
 func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	s.mu.RLock()
 	p, ok := s.providers[name]
+	s.mu.RUnlock()
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"error": map[string]any{

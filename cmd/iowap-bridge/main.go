@@ -28,9 +28,9 @@ import (
 	"github.com/iowap-org/iowap-bridge-daemon/internal/openbrowser"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provider"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provision"
-	"github.com/iowap-org/iowap-bridge-daemon/internal/registry"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/server"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/tokenres"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/watch"
 )
 
 func main() {
@@ -113,17 +113,26 @@ func main() {
 		log.Printf("iowap-bridge: open %s in your browser to register the node (bearer and config snippets are shown there as well)", onboardingURL)
 	}
 
-	// ── Provider registry (T-019): providers.yaml instantiates the
-	// capability sources (comfyui/http/process). Missing or empty file →
-	// empty manifest, never a crash; a broken file refuses to start.
-	provs, err := registry.Load(cfg.ProvidersFile)
+	// ── Provider registry (T-019/T-022): the effective registry is the
+	// workspace file <workspace>/bridge/providers.yaml when it exists
+	// (written by the node dashboard), otherwise IOWAP_PROVIDERS_FILE.
+	// Missing or empty → empty manifest, never a crash; a broken file
+	// refuses to start.
+	workspaceWatch := watch.Options{
+		WorkspaceFile: watch.WorkspaceProvidersPath(workspace),
+		FallbackFile:  cfg.ProvidersFile,
+	}
+	provs, registrySource, err := watch.Resolve(workspaceWatch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "iowap-bridge: %v\n", err)
 		os.Exit(1)
 	}
 	if len(provs) == 0 {
-		log.Printf("iowap-bridge: no providers configured (%s missing or empty) — serving an empty manifest", cfg.ProvidersFile)
+		log.Printf("iowap-bridge: no providers configured (%s missing or empty) — serving an empty manifest", registrySource)
 	}
+
+	srv := server.New(tokens.BridgeToken, workspace)
+	srv.ReplaceProviders(ctx, 15*time.Second, provs...)
 
 	// One synchronous probe per provider up front so the manifest is
 	// accurate from the first poll; the background loops keep it fresh
@@ -134,8 +143,18 @@ func main() {
 		}
 	}
 
-	srv := server.New(tokens.BridgeToken, workspace, provs...)
-	srv.StartHealthLoops(ctx, 15*time.Second)
+	// ── Workspace provider watch (T-022): hot-reload the registry when
+	// <workspace>/bridge/providers.yaml appears, changes or disappears
+	// (poll every 10 s). A broken file keeps the last good registry —
+	// the daemon never crashes over an edit.
+	go watch.Watch(ctx, workspaceWatch, func(source string, newProvs []provider.Provider) {
+		for _, p := range newProvs {
+			if hp, ok := p.(provider.HealthProber); ok {
+				hp.ProbeOnce(ctx)
+			}
+		}
+		srv.ReplaceProviders(ctx, 15*time.Second, newProvs...)
+	})
 
 	ln, err := net.Listen("tcp", cfg.BindAddr())
 	if err != nil {
