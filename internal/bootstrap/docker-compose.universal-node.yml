@@ -1,9 +1,5 @@
-# Vendored from iowap-docker@5e48d0f (docker-compose.universal-node.yml).
-# DO NOT EDIT HERE — this file is the single source of truth for the
+# Vendored from iowap-docker@cb3b1e4 (docker-compose.universal-node.yml).
 # container layout (board DEC #7); change it in iowap-docker and re-vendor
-# (copy + update the provenance commit above).
-#
-# IOWAP — universal node compose.
 #
 # Runs the plain node image (iowap-node-base — the same image every other
 # IOWAP node is built from, no fork) as a self-contained "universal node":
@@ -47,6 +43,10 @@ services:
       # HTTP MCP endpoint — loopback-only on purpose: reachable from agents
       # on the same host, never from the network.
       - "127.0.0.1:7781:7781"
+      # Onboarding/setup UI (T-017): served by the node itself while it is
+      # unconfigured (blank-start). Registration form (node name + relay
+      # URL, mDNS-prefilled), then status + MCP bearer/snippets. Loopback-only.
+      - "127.0.0.1:7783:7783"
     volumes:
       # Workspace shared with the host-side bridge daemon: the daemon writes
       # artifacts here, the node uploads them to the relay. Point
