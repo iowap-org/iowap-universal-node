@@ -55,15 +55,3 @@ func TestGenerateBridgeToken(t *testing.T) {
 	}
 }
 
-func TestHashBearerIsSha256Hex(t *testing.T) {
-	h := HashBearer("iw_mcp_test")
-	if len(h) != 64 {
-		t.Fatalf("hash length = %d, want 64 hex chars", len(h))
-	}
-	if h != HashBearer("iw_mcp_test") {
-		t.Fatal("hash must be deterministic")
-	}
-	if h == HashBearer("iw_mcp_test2") {
-		t.Fatal("different bearers must hash differently")
-	}
-}

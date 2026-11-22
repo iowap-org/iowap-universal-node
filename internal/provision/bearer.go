@@ -1,15 +1,14 @@
-// Package provision implements MCP access provisioning (board T-014,
-// SPEC §9): the daemon generates the HTTP-MCP bearer token at bootstrap,
-// injects it into the container via the compose profile's ${IOWAP_MCP_BEARER}
-// interpolation, shows it exactly once in the web UI together with ready-made
-// agent config snippets — and keeps only a SHA-256 hash afterwards.
+// Package provision implements MCP access token generation (board T-014,
+// v0.1.1 auto-provisioning): the daemon generates the HTTP-MCP bearer and
+// the bridge token at bootstrap and injects them into the container via the
+// compose profile's ${IOWAP_*} interpolation. Since v0.2.0 (board DEC #8)
+// this package is generation only — the one-time display and agent config
+// snippets live in the node-side onboarding UI (board T-017, port 7783).
 package provision
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 )
 
@@ -42,11 +41,4 @@ func generateToken(prefix string) (string, error) {
 		return "", fmt.Errorf("generating token: %w", err)
 	}
 	return prefix + base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-// HashBearer returns the hex SHA-256 of the full bearer token — the only
-// thing the daemon keeps after the one-time display.
-func HashBearer(bearer string) string {
-	sum := sha256.Sum256([]byte(bearer))
-	return hex.EncodeToString(sum[:])
 }

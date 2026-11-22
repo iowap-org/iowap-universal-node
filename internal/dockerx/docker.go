@@ -1,24 +1,18 @@
 // Package dockerx is the docker/docker SDK-backed implementation of the
-// engine/exec interfaces the bootstrap and web UI packages consume. The
-// client uses client.FromEnv — the default route to the local Docker
-// Desktop engine (Windows named pipe, unix socket elsewhere).
+// engine interfaces the bootstrap package consumes. The client uses
+// client.FromEnv — the default route to the local Docker Desktop engine
+// (Windows named pipe, unix socket elsewhere).
 package dockerx
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/stdcopy"
-
-	"github.com/iowap-org/iowap-bridge-daemon/internal/nodecli"
 )
 
 // Client talks to the local Docker Engine.
@@ -104,39 +98,4 @@ func (c *Client) lookupContainer(ctx context.Context, name string) (*types.Conta
 	return nil, false, nil
 }
 
-// Exec runs a command inside the container and returns the demultiplexed
-// stdout/stderr plus the exit code.
-func (c *Client) Exec(ctx context.Context, name string, cmd []string, timeout time.Duration) (nodecli.Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
-	created, err := c.cli.ContainerExecCreate(ctx, name, container.ExecOptions{
-		Cmd:          cmd,
-		AttachStdout: true,
-		AttachStderr: true,
-	})
-	if err != nil {
-		return nodecli.Result{}, fmt.Errorf("exec create in %s: %w", name, err)
-	}
-
-	resp, err := c.cli.ContainerExecAttach(ctx, created.ID, container.ExecStartOptions{})
-	if err != nil {
-		return nodecli.Result{}, fmt.Errorf("exec start in %s: %w", name, err)
-	}
-	defer resp.Close()
-
-	var stdout, stderr bytes.Buffer
-	if _, err := stdcopy.StdCopy(&stdout, &stderr, resp.Reader); err != nil && err != io.EOF {
-		return nodecli.Result{}, fmt.Errorf("reading exec output: %w", err)
-	}
-
-	inspected, err := c.cli.ContainerExecInspect(ctx, created.ID)
-	if err != nil {
-		return nodecli.Result{}, fmt.Errorf("exec inspect in %s: %w", name, err)
-	}
-	return nodecli.Result{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: inspected.ExitCode,
-	}, nil
-}

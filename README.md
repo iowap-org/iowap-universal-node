@@ -39,25 +39,28 @@ the daemon no longer *demands* the token from the user; it resolves it:
      `IOWAP_BRIDGE_TOKEN`, `IOWAP_MCP_BEARER` and `IOWAP_WORKSPACE_DIR`;
    * existing but stopped → started as-is (its env — and with it the
      already-configured MCP bearer — stays untouched);
-   * already running → skipped.
-3. **Onboarding UI** on `127.0.0.1:7782` — container status, node
-   registration form (server field pre-filled from the container's
-   `iowap-cli --json relay discover` mDNS lookup; submit runs
-   `iowap-cli --json node register <server> --name <name>` inside the
-   container).
-4. **MCP bearer display (one-time)** — after a bootstrap the UI shows the
-   generated `iw_mcp_…` bearer exactly once, together with ready-made agent
-   config snippets (Hermes, Claude Desktop/Code, Codex, generic curl probe).
-   Afterwards the daemon keeps only the SHA-256 hash; rotation = container
-   recreate. A daemon restart that finds the container already running
-   never shows a bearer.
-5. **Bridge API** on `127.0.0.1:7780` (below).
+   * already running → skipped. **Bridge API** on `127.0.0.1:7780` (below).
+
+   Every step is announced on the console ("checking Docker Engine…",
+   "checking container state…", "pulling image and starting container…",
+   "container ready"). A successful bootstrap ends by opening the node's
+   registration page `http://127.0.0.1:7783` in the default browser — also
+   in the "container was already running" case (the page then shows the
+   node status). Best-effort: if no browser can be launched, the URL is
+   printed as the last console line instead; the daemon never crashes over
+   a failed browser launch.
+
+> **Onboarding moved into the node container (v0.2.0, board DEC #8).** The
+> daemon no longer ships an onboarding web UI and no longer displays the MCP
+> bearer. Node registration and the one-time bearer/snippet display live in
+> the node-side onboarding UI at `http://127.0.0.1:7783` (served inside the
+> `iowap-universal-node` container).
 
 | Port  | Purpose                                        | Binding     |
 |-------|------------------------------------------------|-------------|
 | 7780  | Bridge manifest/exec API (node → daemon)       | 127.0.0.1   |
 | 7781  | HTTP MCP endpoint (agents → node container)    | 127.0.0.1   |
-| 7782  | Onboarding web UI (browser, this host)         | 127.0.0.1   |
+| 7783  | Node onboarding UI + bearer/snippet display (node container, board T-017) | 127.0.0.1   |
 
 ## Build & Run
 

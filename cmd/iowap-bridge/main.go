@@ -3,14 +3,13 @@
 // Manifest/Exec contract (SPEC §3/§5), authenticated with a Bearer
 // token and bound to loopback only.
 //
-// The daemon never demands token env vars from the user (v0.1.1,
-// DEC #5/#6): tokens are resolved via internal/tokenres — env override →
-// existing container env → generated. Before serving, the daemon runs the
-// bootstrap mode (board T-012): it checks the Docker Engine and — unless
-// the universal-node container already exists — brings the container up via
-// the vendored iowap-docker compose profile, generating the MCP bearer for
-// one-time display (T-014). The local onboarding web UI (T-010) then serves
-// on port 7782.
+// Since v0.2.0 (board DEC #8) the daemon is a pure execution layer: it
+// runs the bootstrap (engine check, vendored compose profile, container
+// lifecycle, board T-012), resolves its tokens automatically (v0.1.1,
+// internal/tokenres) and serves the Manifest/Exec API for the providers
+// configured in providers.yaml (board T-019). The onboarding UI and the
+// MCP bearer/snippet display live in the node container (board T-017,
+// port 7783) — not here.
 package main
 
 import (
@@ -26,11 +25,11 @@ import (
 	"github.com/iowap-org/iowap-bridge-daemon/internal/bootstrap"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/config"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/dockerx"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/openbrowser"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provider/comfyui"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provision"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/server"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/tokenres"
-	"github.com/iowap-org/iowap-bridge-daemon/internal/web"
 )
 
 func main() {
@@ -51,6 +50,7 @@ func main() {
 	// existing universal-node container → generate (fresh install). The
 	// daemon never demands tokens from the user; fail-closed remains as the
 	// last stage (generation failure → exit 1, never serve tokenless).
+	log.Printf("iowap-bridge: checking Docker Engine…")
 	if err := eng.Ping(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "iowap-bridge: docker engine not reachable (%v) — install or start Docker Desktop, then run the daemon again\n", err)
 		os.Exit(1)
@@ -95,15 +95,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "iowap-bridge: bootstrap failed: %v\n", err)
 		os.Exit(1)
 	}
-	var view *provision.OnceView
-	// One-time display only for a freshly created container with a freshly
-	// generated bearer — reused tokens are never re-displayed (DEC #6,
-	// hash-only afterwards).
-	if result.Bearer != "" && tokens.BearerSource == tokenres.SourceGenerated {
-		view = provision.NewOnceView(result.Bearer)
-		log.Printf("iowap-bridge: universal node container created — MCP bearer available once at http://%s:%d",
-			config.BindHost, cfg.UIPort)
-	}
 	if result.Skipped {
 		log.Printf("iowap-bridge: container %s already running — bootstrap skipped", bootstrap.ContainerName)
 	}
@@ -111,21 +102,17 @@ func main() {
 		log.Printf("iowap-bridge: existing container %s restarted as-is — tokens unchanged", bootstrap.ContainerName)
 	}
 
-	// ── Onboarding web UI (T-010), loopback only, separate port.
-	ui := web.New(eng, eng, view, cfg.MCPPort)
-	uiLn, err := net.Listen("tcp", fmt.Sprintf("%s:%d", config.BindHost, cfg.UIPort))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "iowap-bridge: cannot listen on UI port %d: %v\n", cfg.UIPort, err)
-		os.Exit(1)
+	// ── Hand-off to the node-side onboarding UI (v0.2.0, board T-017/T-018):
+	// the natural end of every successful bootstrap — created, restarted or
+	// already running — is opening the registration page (which doubles as
+	// the bearer/snippet display) in the default browser. Best-effort: when
+	// no browser can be launched, the URL is the last console line.
+	const onboardingURL = "http://127.0.0.1:7783"
+	if err := openbrowser.Open(onboardingURL); err != nil {
+		log.Printf("iowap-bridge: open %s in your browser to register the node (bearer and config snippets are shown there as well)", onboardingURL)
 	}
-	go func() {
-		if err := http.Serve(uiLn, ui.Handler()); err != nil {
-			log.Printf("iowap-bridge: onboarding UI stopped: %v", err)
-		}
-	}()
-	log.Printf("iowap-bridge: onboarding UI listening on %s:%d (loopback only)", config.BindHost, cfg.UIPort)
 
-	// ── Bridge contract server (T-006/T-007).
+	// ── Bridge contract server (T-006/T-007/T-019).
 	comfy := comfyui.New(cfg.ComfyUIURL, cfg.ComfyUICmd)
 
 	// One synchronous probe up front so the manifest is accurate from

@@ -10,6 +10,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -103,6 +104,7 @@ func Run(ctx context.Context, eng Engine, opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("docker engine not reachable (%v) — install or start Docker Desktop, then run the daemon again", err)
 	}
 
+	log.Printf("iowap-bridge: checking container state…")
 	running, err := eng.ContainerRunning(ctx, ContainerName)
 	if err != nil {
 		return Result{}, fmt.Errorf("checking container %s: %w", ContainerName, err)
@@ -119,12 +121,15 @@ func Run(ctx context.Context, eng Engine, opts Options) (Result, error) {
 		// Start the existing container untouched: recreating it via the
 		// compose profile would rotate the MCP bearer and break every
 		// agent config the user already saved (DEC #6).
+		log.Printf("iowap-bridge: starting existing container %s…", ContainerName)
 		if err := eng.StartContainer(ctx, ContainerName); err != nil {
 			return Result{}, fmt.Errorf("starting existing container %s: %w", ContainerName, err)
 		}
+		log.Printf("iowap-bridge: container ready")
 		return Result{Restarted: true}, nil
 	}
 
+	log.Printf("iowap-bridge: pulling image and starting container via compose profile…")
 	err = opts.RunCompose(ctx, composeFile, map[string]string{
 		"IOWAP_BRIDGE_TOKEN":  opts.BridgeToken,
 		"IOWAP_MCP_BEARER":    opts.MCPBearer,
@@ -133,6 +138,7 @@ func Run(ctx context.Context, eng Engine, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("starting %s via compose profile: %w", ContainerName, err)
 	}
+	log.Printf("iowap-bridge: container ready")
 	return Result{Bearer: opts.MCPBearer}, nil
 }
 
