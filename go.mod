@@ -5,7 +5,9 @@ go 1.23.0
 toolchain go1.23.12
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/docker/docker v28.3.3+incompatible
+	golang.org/x/sys v0.30.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -20,6 +22,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/atomicwriter v0.1.0 // indirect
@@ -34,7 +37,6 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.35.0 // indirect
 	go.opentelemetry.io/otel/metric v1.35.0 // indirect
 	go.opentelemetry.io/otel/trace v1.35.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )

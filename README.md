@@ -53,20 +53,68 @@ the daemon no longer *demands* the token from the user; it resolves it:
    printed as the last console line instead; the daemon never crashes over
    a failed browser launch.
 3. **Provider registry** (`internal/registry`, board T-019) — capabilities
-   come from `providers.yaml` in the config dir (env `IOWAP_PROVIDERS_FILE`,
-   default `<configdir>/iowap-bridge/providers.yaml`). A missing or empty
-   file is fine: the daemon serves an **empty manifest** rather than
-   crashing. A broken file (bad YAML, unknown type, missing required
-   fields) makes the daemon refuse to start — loud, not silent. See
+   come from `providers.yaml`. The **workspace file** takes precedence:
+   if `<workspace>/bridge/providers.yaml` exists (the channel the node
+   dashboard writes capability definitions through, board T-021/T-022),
+   it overrides the config-dir registry. A missing or empty file is fine:
+   the daemon serves an **empty manifest** rather than crashing. A broken
+   file makes the daemon refuse to start — loud, not silent. See
    [Providers](#providers-providersyaml) below and
    `providers.example.yaml`.
-4. **Bridge API** on `127.0.0.1:7780` (below).
+
+   **Workspace provider watch (T-022):** after startup the daemon polls
+   both files every 10 s (plain polling, no fsnotify — Windows-simple).
+   The workspace file appearing, changing or disappearing hot-reloads the
+   registry without a daemon restart — the manifest and exec routing
+   follow immediately, health loops are restarted for the new provider
+   set. A broken edit logs a warning and keeps the **last good registry**
+   (never crashes, never serves an empty manifest over a broken file);
+   when the workspace file disappears, the config-dir registry
+   (`IOWAP_PROVIDERS_FILE`) takes over again.
+4. **Bridge API** on `127.0.0.1:7780` (below), plus the **tray icon**
+   (Windows — see below).
 
 > **Onboarding moved into the node container (v0.2.0, board DEC #8).** The
 > daemon no longer ships an onboarding web UI and no longer displays the MCP
 > bearer. Node registration and the one-time bearer/snippet display live in
 > the node-side onboarding UI at `http://127.0.0.1:7783` (served inside the
 > `iowap-universal-node` container).
+
+## Tray icon (Windows, board T-023)
+
+The daemon adds a system tray icon (`fyne.io/systray` — pure Go on
+Windows, no CGO). The tray runs in its own goroutine and is best-effort:
+any tray failure or panic is logged, the bridge daemon keeps serving.
+
+**Status widget** (disabled header lines in the menu, refreshed every
+5 s): container state (`running`/`stopped` via the Docker Engine),
+node registration (probed from the node dashboard on 7783 — the blank
+setup form means "not registered"), daemon version and the pulled node
+image digest.
+
+**Menu:**
+
+* **Open Dashboard** — opens `http://127.0.0.1:7783` in the default
+  browser (same helper as the bootstrap hand-off).
+* **Restart docker container** — stops and starts the
+  `iowap-universal-node` container as-is (no recreate, tokens/bearers
+  untouched — consistent with the bootstrap's existing-container path).
+* **Check for updates** — informational only in v1 (nothing is
+  downloaded or executed):
+  * container image: the local repo digest (`ghcr.io/iowap-org/
+    iowap-node-base`) vs. the registry's current digest (registry v2
+    API, anonymous pull token);
+  * the exe: the daemon's own version vs. the GitHub latest release of
+    `iowap-org/iowap-bridge-daemon`.
+  The result ("update available" / "up to date" / reason it could not
+  check) appears as a status line and in the log.
+* **Quit** — confirmation dialog **"Stop the node container too?"**:
+  *Yes* stops the container and exits the daemon; *No* exits the daemon
+  and leaves the node running. The daemon exits even when the container
+  stop fails (the failure is logged).
+
+On non-Windows platforms the tray is a no-op stub (the daemon stays
+buildable and CGO-free; CI runs the full suite there).
 
 | Port  | Purpose                                        | Binding     |
 |-------|------------------------------------------------|-------------|
@@ -90,7 +138,7 @@ go run ./cmd/iowap-bridge
 | `IOWAP_MCP_BEARER`     | no       | auto-provisioned          | Power-user override for the MCP bearer agents must present on port 7781. Generated at container creation and displayed once by the node-side onboarding UI (port 7783); reused from the container env on daemon restarts. |
 | `IOWAP_BRIDGE_PORT`    | no       | `7780`                    | TCP port. The daemon binds `127.0.0.1` only — never a foreign interface. |
 | `IOWAP_WORKSPACE_DIR`  | no       | `./workspace`             | Workspace root; must be the same directory the node container mounts at `/workspace`. |
-| `IOWAP_PROVIDERS_FILE` | no       | `<configdir>/iowap-bridge/providers.yaml` | Provider registry (board T-019). Missing/empty → empty manifest. |
+| `IOWAP_PROVIDERS_FILE` | no       | `<configdir>/iowap-bridge/providers.yaml` | Provider registry (board T-019). Overridden by `<workspace>/bridge/providers.yaml` when that file exists (workspace watch, board T-022). Missing/empty → empty manifest. |
 | `IOWAP_MCP_PORT`       | —        | removed (v0.2.0)          | Was UI-snippet-only; the compose profile owns the real 7781 mapping. |
 
 ## Providers (providers.yaml)
@@ -183,7 +231,7 @@ comparison).
 ```json
 {
   "version": 1,
-  "provider": { "name": "iowap-bridge", "host_os": "windows", "version": "0.2.0" },
+  "provider": { "name": "iowap-bridge", "host_os": "windows", "version": "0.3.0" },
   "capabilities": [
     {
       "name": "comfy.generate",

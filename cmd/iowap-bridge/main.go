@@ -30,6 +30,7 @@ import (
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provision"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/server"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/tokenres"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/tray"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/watch"
 )
 
@@ -156,14 +157,55 @@ func main() {
 		srv.ReplaceProviders(ctx, 15*time.Second, newProvs...)
 	})
 
+	// ── Tray icon (T-023, Windows-first): status widget + menu. Best
+	// effort — the daemon serves with or without a working tray.
+	runTray(eng)
+
 	ln, err := net.Listen("tcp", cfg.BindAddr())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "iowap-bridge: cannot listen on %s: %v\n", cfg.BindAddr(), err)
 		os.Exit(1)
 	}
 	log.Printf("iowap-bridge %s listening on %s (loopback only), workspace %s, %d provider(s) from %s",
-		server.Version, cfg.BindAddr(), workspace, len(provs), cfg.ProvidersFile)
+		server.Version, cfg.BindAddr(), workspace, len(provs), registrySource)
 	if err := http.Serve(ln, srv.Handler()); err != nil {
 		log.Fatalf("iowap-bridge: server error: %v", err)
 	}
+}
+
+// trayController adapts the dockerx client method names onto the tray's
+// ContainerController interface.
+type trayController struct{ eng *dockerx.Client }
+
+func (t trayController) Running(ctx context.Context, name string) (bool, error) {
+	return t.eng.ContainerRunning(ctx, name)
+}
+func (t trayController) Stop(ctx context.Context, name string) error {
+	return t.eng.StopContainer(ctx, name)
+}
+func (t trayController) Start(ctx context.Context, name string) error {
+	return t.eng.StartContainer(ctx, name)
+}
+
+// runTray starts the Windows tray icon (board T-023). It runs entirely in
+// a goroutine and is crash-proof: any panic or error is logged, the daemon
+// keeps serving (a missing tray must never take down the bridge).
+func runTray(eng *dockerx.Client) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("iowap-bridge: tray panicked (daemon keeps running): %v", r)
+			}
+		}()
+		tray.Run(tray.App{
+			Ctrl:          trayController{eng: eng},
+			DaemonVersion: server.Version,
+			ImageRef:      tray.NodeImage,
+			RepoDigestsOf: eng.ImageRepoDigests,
+			Shutdown: func() {
+				log.Printf("iowap-bridge: quit requested from the tray")
+				os.Exit(0)
+			},
+		})
+	}()
 }

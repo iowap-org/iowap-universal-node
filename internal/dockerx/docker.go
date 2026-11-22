@@ -79,6 +79,29 @@ func (c *Client) StartContainer(ctx context.Context, name string) error {
 	return nil
 }
 
+// StopContainer stops the named container (tray "quit + stop container",
+// board T-023).
+func (c *Client) StopContainer(ctx context.Context, name string) error {
+	if err := c.cli.ContainerStop(ctx, name, container.StopOptions{}); err != nil {
+		return fmt.Errorf("stopping container %s: %w", name, err)
+	}
+	return nil
+}
+
+// ImageRepoDigests returns the pulled image's registry digests
+// ("ghcr.io/org/img@sha256:…") for the tray's image update check
+// (board T-023). Missing image: (nil, nil).
+func (c *Client) ImageRepoDigests(ctx context.Context, imageRef string) ([]string, error) {
+	inspected, _, err := c.cli.ImageInspectWithRaw(ctx, imageRef)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("inspecting image %s: %w", imageRef, err)
+	}
+	return inspected.RepoDigests, nil
+}
+
 // lookupContainer finds the named container via the list API.
 func (c *Client) lookupContainer(ctx context.Context, name string) (*types.Container, bool, error) {
 	cts, err := c.cli.ContainerList(ctx, container.ListOptions{
