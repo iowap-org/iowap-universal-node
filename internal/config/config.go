@@ -1,6 +1,8 @@
 // Package config loads the daemon configuration from the environment.
 //
-// Fail-closed: without IOWAP_BRIDGE_TOKEN the daemon refuses to start
+// Tokens are NOT config's concern (v0.1.1): IOWAP_BRIDGE_TOKEN and
+// IOWAP_MCP_BEARER are resolved by internal/tokenres (env override →
+// container inspect → generate). The bridge server itself stays fail-closed
 // (SPEC §2 — every endpoint requires the Bearer token).
 package config
 
@@ -27,7 +29,6 @@ const (
 
 // Config is the resolved daemon configuration.
 type Config struct {
-	Token        string
 	Port         int
 	WorkspaceDir string
 	ComfyUIURL   string
@@ -39,16 +40,12 @@ type Config struct {
 // Load reads the environment via the given getter (injected for tests).
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		Token:        strings.TrimSpace(getenv("IOWAP_BRIDGE_TOKEN")),
 		Port:         DefaultPort,
 		WorkspaceDir: DefaultWorkspaceDir,
 		ComfyUIURL:   DefaultComfyUIURL,
 		ComfyUICmd:   getenv("IOWAP_COMFYUI_CMD"),
 		UIPort:       DefaultUIPort,
 		MCPPort:      DefaultMCPPort,
-	}
-	if cfg.Token == "" {
-		return cfg, fmt.Errorf("IOWAP_BRIDGE_TOKEN must be set to a non-empty value (the node container receives the same token as its bridge auth)")
 	}
 	if v := getenv("IOWAP_BRIDGE_PORT"); v != "" {
 		port, err := strconv.Atoi(v)

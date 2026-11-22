@@ -13,17 +13,33 @@ HTTP; both sides share a workspace directory for artifact hand-off.
 
 ## Startup flow
 
-1. **Config** — `IOWAP_BRIDGE_TOKEN` is required; the daemon fails closed
-   without it (SPEC §2).
+**No env setup needed — the daemon provisions its tokens.** A fresh
+machine works with a plain exe double-click: the daemon generates its
+bridge token and MCP bearer itself (v0.1.1, DEC #5/#6). The fail-closed
+rule still holds — the server never serves without a valid Bearer — but
+the daemon no longer *demands* the token from the user; it resolves it:
+
+1. **Token resolution** (`internal/tokenres`) — in order:
+   * explicit env (`IOWAP_BRIDGE_TOKEN` / `IOWAP_MCP_BEARER`, power-user
+     override), else
+   * **existing container**: tokens are reused from the
+     `iowap-universal-node` container env (docker inspect) — the container
+     IS the secret store, so a daemon restart beside a running node
+     (autostart, PC reboot) keeps everything working without persisting a
+     secret, else
+   * **generated** (crypto/rand, `iw_br_…` / `iw_mcp_…`). Only if
+     generation fails does the daemon exit 1.
 2. **Bootstrap** — the daemon checks the Docker Engine (`client.FromEnv`:
    Windows named pipe / unix socket). Unreachable → actionable error
-   ("install or start Docker Desktop") and exit 1. If the
-   `iowap-universal-node` container is not already running, the daemon
-   brings it up by executing the **vendored iowap-docker compose profile**
-   (`internal/bootstrap/docker-compose.universal-node.yml`, provenance-marked
-   — the profile file is the single source of truth, board DEC #7) via
-   `docker compose -f <file> up -d`, injecting `IOWAP_BRIDGE_TOKEN`,
-   `IOWAP_MCP_BEARER` (daemon-generated) and `IOWAP_WORKSPACE_DIR`.
+   ("install or start Docker Desktop") and exit 1. Container handling:
+   * not existing → created via the **vendored iowap-docker compose
+     profile** (`internal/bootstrap/docker-compose.universal-node.yml`,
+     provenance-marked — the profile file is the single source of truth,
+     board DEC #7) with `docker compose -f <file> up -d`, injecting
+     `IOWAP_BRIDGE_TOKEN`, `IOWAP_MCP_BEARER` and `IOWAP_WORKSPACE_DIR`;
+   * existing but stopped → started as-is (its env — and with it the
+     already-configured MCP bearer — stays untouched);
+   * already running → skipped.
 3. **Onboarding UI** on `127.0.0.1:7782` — container status, node
    registration form (server field pre-filled from the container's
    `iowap-cli --json relay discover` mDNS lookup; submit runs
@@ -55,7 +71,8 @@ go run ./cmd/iowap-bridge
 
 | Variable               | Required | Default                   | Description                                                        |
 |------------------------|----------|---------------------------|--------------------------------------------------------------------|
-| `IOWAP_BRIDGE_TOKEN`   | yes      | —                         | Bearer token for all endpoints. **Fail-closed:** if unset/empty the daemon exits before opening a socket. The node container receives the same token as `IOWAP_BRIDGE_TOKEN` (injected at container creation). |
+| `IOWAP_BRIDGE_TOKEN`   | no       | auto-provisioned          | Power-user override. By default the daemon resolves the token itself (env → existing container env → generated, `iw_br_…`). The bridge server stays fail-closed: every endpoint requires this Bearer. The node container receives the same token as `IOWAP_BRIDGE_TOKEN` (injected at container creation). |
+| `IOWAP_MCP_BEARER`     | no       | auto-provisioned          | Power-user override for the MCP bearer agents must present on port 7781. By default generated at container creation and shown exactly once in the onboarding UI; reused from the container env on daemon restarts (never re-displayed). |
 | `IOWAP_BRIDGE_PORT`    | no       | `7780`                    | TCP port. The daemon binds `127.0.0.1` only — never a foreign interface. |
 | `IOWAP_WORKSPACE_DIR`  | no       | `./workspace`             | Workspace root; must be the same directory the node container mounts at `/workspace`. |
 | `IOWAP_COMFYUI_URL`    | no       | `http://127.0.0.1:8188`   | ComfyUI base URL.                                                  |
@@ -74,7 +91,7 @@ comparison).
 ```json
 {
   "version": 1,
-  "provider": { "name": "iowap-bridge", "host_os": "windows", "version": "0.1.0" },
+  "provider": { "name": "iowap-bridge", "host_os": "windows", "version": "0.1.1" },
   "capabilities": [
     {
       "name": "comfy.generate",

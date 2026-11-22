@@ -3,11 +3,14 @@
 // Manifest/Exec contract (SPEC §3/§5), authenticated with a Bearer
 // token and bound to loopback only.
 //
-// Before serving, the daemon runs the bootstrap mode (board T-012): it
-// checks the Docker Engine and — unless the universal-node container is
-// already running — brings the container up via the vendored iowap-docker
-// compose profile, generating the MCP bearer for one-time display (T-014).
-// The local onboarding web UI (T-010) then serves on port 7782.
+// The daemon never demands token env vars from the user (v0.1.1,
+// DEC #5/#6): tokens are resolved via internal/tokenres — env override →
+// existing container env → generated. Before serving, the daemon runs the
+// bootstrap mode (board T-012): it checks the Docker Engine and — unless
+// the universal-node container already exists — brings the container up via
+// the vendored iowap-docker compose profile, generating the MCP bearer for
+// one-time display (T-014). The local onboarding web UI (T-010) then serves
+// on port 7782.
 package main
 
 import (
@@ -26,15 +29,48 @@ import (
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provider/comfyui"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provision"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/server"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/tokenres"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/web"
 )
 
 func main() {
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		// Fail closed before any socket exists (SPEC §2).
 		fmt.Fprintf(os.Stderr, "iowap-bridge: refusing to start: %v\n", err)
 		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	eng, err := dockerx.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "iowap-bridge: %v\n", err)
+		os.Exit(1)
+	}
+
+	// ── Token resolution (v0.1.1): explicit env override → reuse from the
+	// existing universal-node container → generate (fresh install). The
+	// daemon never demands tokens from the user; fail-closed remains as the
+	// last stage (generation failure → exit 1, never serve tokenless).
+	if err := eng.Ping(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "iowap-bridge: docker engine not reachable (%v) — install or start Docker Desktop, then run the daemon again\n", err)
+		os.Exit(1)
+	}
+	tokens, err := tokenres.Resolve(ctx, tokenres.Options{
+		GetEnv:              os.Getenv,
+		ContainerName:       bootstrap.ContainerName,
+		InspectEnv:          eng.InspectEnv,
+		GenerateBridgeToken: provision.GenerateBridgeToken,
+		GenerateBearer:      provision.GenerateBearer,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "iowap-bridge: refusing to start: %v\n", err)
+		os.Exit(1)
+	}
+	switch {
+	case tokens.BearerSource == tokenres.SourceContainer:
+		log.Printf("iowap-bridge: tokens reused from existing %s container", bootstrap.ContainerName)
+	case tokens.BearerSource == tokenres.SourceGenerated:
+		log.Printf("iowap-bridge: fresh install — bridge token and MCP bearer generated (no env setup needed)")
 	}
 
 	if err := os.MkdirAll(cfg.WorkspaceDir, 0o755); err != nil {
@@ -47,33 +83,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── Bootstrap (T-012/T-014): engine check → container lifecycle →
-	// MCP bearer for one-time display. Exits 1 with an actionable message
-	// when the engine is unreachable.
-	ctx := context.Background()
-	eng, err := dockerx.New()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "iowap-bridge: %v\n", err)
-		os.Exit(1)
-	}
+	// ── Bootstrap (T-012/T-014): container lifecycle with the resolved
+	// tokens. Exits 1 with an actionable message when it cannot proceed.
 	result, err := bootstrap.Run(ctx, eng, bootstrap.Options{
-		BridgeToken:    cfg.Token,
-		WorkspaceDir:   workspace,
-		GenerateBearer: provision.GenerateBearer,
-		RunCompose:     bootstrap.ExecCompose,
+		BridgeToken:  tokens.BridgeToken,
+		MCPBearer:    tokens.MCPBearer,
+		WorkspaceDir: workspace,
+		RunCompose:   bootstrap.ExecCompose,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "iowap-bridge: bootstrap failed: %v\n", err)
 		os.Exit(1)
 	}
 	var view *provision.OnceView
-	if result.Bearer != "" {
+	// One-time display only for a freshly created container with a freshly
+	// generated bearer — reused tokens are never re-displayed (DEC #6,
+	// hash-only afterwards).
+	if result.Bearer != "" && tokens.BearerSource == tokenres.SourceGenerated {
 		view = provision.NewOnceView(result.Bearer)
 		log.Printf("iowap-bridge: universal node container created — MCP bearer available once at http://%s:%d",
 			config.BindHost, cfg.UIPort)
 	}
 	if result.Skipped {
 		log.Printf("iowap-bridge: container %s already running — bootstrap skipped", bootstrap.ContainerName)
+	}
+	if result.Restarted {
+		log.Printf("iowap-bridge: existing container %s restarted as-is — tokens unchanged", bootstrap.ContainerName)
 	}
 
 	// ── Onboarding web UI (T-010), loopback only, separate port.
@@ -98,7 +133,7 @@ func main() {
 	// start-on-demand when IOWAP_COMFYUI_CMD is configured).
 	comfy.ProbeOnce(ctx)
 
-	srv := server.New(cfg.Token, workspace, comfy)
+	srv := server.New(tokens.BridgeToken, workspace, comfy)
 	srv.StartHealthLoops(ctx, 15*time.Second)
 
 	ln, err := net.Listen("tcp", cfg.BindAddr())

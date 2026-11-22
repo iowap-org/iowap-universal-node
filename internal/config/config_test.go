@@ -12,12 +12,9 @@ func load(t *testing.T, env map[string]string) (Config, error) {
 }
 
 func TestLoadDefaults(t *testing.T) {
-	cfg, err := load(t, map[string]string{"IOWAP_BRIDGE_TOKEN": "secret"})
+	cfg, err := load(t, map[string]string{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Token != "secret" {
-		t.Errorf("Token = %q", cfg.Token)
 	}
 	if cfg.Port != 7780 {
 		t.Errorf("Port = %d, want 7780", cfg.Port)
@@ -56,15 +53,19 @@ func TestLoadOverrides(t *testing.T) {
 	}
 }
 
-// Fail closed: without a token the daemon must refuse to start.
-func TestLoadFailClosedWithoutToken(t *testing.T) {
+// The token is no longer config's concern (v0.1.1): resolution lives in
+// internal/tokenres (env override → container inspect → generate, fail
+// closed only if generation fails). config.Load succeeds without any token
+// env — the "lazy Windows user" flow (exe double-click, zero env setup)
+// must work.
+func TestLoadSucceedsWithoutTokenEnv(t *testing.T) {
 	for _, env := range []map[string]string{{}, {"IOWAP_BRIDGE_TOKEN": ""}, {"IOWAP_BRIDGE_TOKEN": "   "}} {
-		_, err := load(t, env)
-		if err == nil {
-			t.Fatalf("Load(%v) = nil error, want fail-closed", env)
+		cfg, err := load(t, env)
+		if err != nil {
+			t.Fatalf("Load(%v) = error %v, want success (token resolution moved to tokenres)", env, err)
 		}
-		if !strings.Contains(err.Error(), "IOWAP_BRIDGE_TOKEN") {
-			t.Errorf("error %q does not name IOWAP_BRIDGE_TOKEN", err)
+		if cfg.Port != 7780 {
+			t.Errorf("Load(%v): Port = %d", env, cfg.Port)
 		}
 	}
 }

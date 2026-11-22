@@ -13,11 +13,22 @@ type fakeEngine struct {
 	pingErr    error
 	running    bool
 	runningErr error
+	exists     bool
+	existsErr  error
+	started    string
+	startErr   error
 }
 
 func (f *fakeEngine) Ping(ctx context.Context) error { return f.pingErr }
 func (f *fakeEngine) ContainerRunning(ctx context.Context, name string) (bool, error) {
 	return f.running, f.runningErr
+}
+func (f *fakeEngine) ContainerExists(ctx context.Context, name string) (bool, error) {
+	return f.exists, f.existsErr
+}
+func (f *fakeEngine) StartContainer(ctx context.Context, name string) error {
+	f.started = name
+	return f.startErr
 }
 
 // recordingRunner captures the compose invocation.
@@ -35,14 +46,12 @@ func (r *recordingRunner) run(ctx context.Context, yaml []byte, env map[string]s
 	return r.err
 }
 
-func genBearer() (string, error) { return "iw_mcp_fixed_test_bearer", nil }
-
 func opts(runner *recordingRunner) Options {
 	return Options{
-		BridgeToken:    "bridge-token",
-		WorkspaceDir:   "/ws",
-		GenerateBearer: genBearer,
-		RunCompose:     runner.run,
+		BridgeToken:  "bridge-token",
+		MCPBearer:    "iw_mcp_fixed_test_bearer",
+		WorkspaceDir: "/ws",
+		RunCompose:   runner.run,
 	}
 }
 
@@ -75,6 +84,37 @@ func TestRunContainerRunningSkipsBootstrap(t *testing.T) {
 	}
 	if runner.called {
 		t.Fatal("skip must not run the compose profile")
+	}
+}
+
+// An existing but stopped container is started as-is: its env (and with it
+// the MCP bearer the user already configured) stays untouched — no recreate.
+func TestRunRestartsExistingStoppedContainer(t *testing.T) {
+	runner := &recordingRunner{}
+	eng := &fakeEngine{exists: true, running: false}
+	res, err := Run(context.Background(), eng, opts(runner))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Skipped || !res.Restarted {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if res.Bearer != "" {
+		t.Fatal("restart must not hand out the bearer for re-display (hash-only, DEC #6)")
+	}
+	if eng.started != ContainerName {
+		t.Fatalf("StartContainer(%q) expected, got %q", ContainerName, eng.started)
+	}
+	if runner.called {
+		t.Fatal("restart must not run the compose profile — that would recreate the container and rotate the bearer")
+	}
+}
+
+func TestRunStartExistingContainerErrorSurfaces(t *testing.T) {
+	eng := &fakeEngine{exists: true, startErr: errors.New("start failed")}
+	_, err := Run(context.Background(), eng, opts(&recordingRunner{}))
+	if err == nil || !strings.Contains(err.Error(), "start") {
+		t.Fatalf("expected the start error to surface, got: %v", err)
 	}
 }
 
@@ -128,9 +168,12 @@ func TestRunChecksContainerError(t *testing.T) {
 
 func TestRunRequiresDeps(t *testing.T) {
 	if _, err := Run(context.Background(), &fakeEngine{}, Options{RunCompose: func(context.Context, []byte, map[string]string) error { return nil }}); err == nil {
-		t.Fatal("missing bearer generator must fail")
+		t.Fatal("missing bridge token must fail")
 	}
-	if _, err := Run(context.Background(), &fakeEngine{}, Options{GenerateBearer: genBearer}); err == nil {
+	if _, err := Run(context.Background(), &fakeEngine{}, Options{BridgeToken: "t", RunCompose: func(context.Context, []byte, map[string]string) error { return nil }}); err == nil {
+		t.Fatal("missing MCP bearer must fail")
+	}
+	if _, err := Run(context.Background(), &fakeEngine{}, Options{BridgeToken: "t", MCPBearer: "b"}); err == nil {
 		t.Fatal("missing compose runner must fail")
 	}
 	if _, err := Run(context.Background(), nil, opts(&recordingRunner{})); err == nil {

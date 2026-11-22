@@ -11,9 +11,11 @@ import (
 	"io"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 
 	"github.com/iowap-org/iowap-bridge-daemon/internal/nodecli"
@@ -42,21 +44,64 @@ func (c *Client) Ping(ctx context.Context) error {
 // ContainerRunning reports whether the named container exists and is
 // currently running.
 func (c *Client) ContainerRunning(ctx context.Context, name string) (bool, error) {
+	ct, exists, err := c.lookupContainer(ctx, name)
+	if err != nil || !exists {
+		return false, err
+	}
+	return ct.State == "running", nil
+}
+
+// InspectEnv returns the container's configured environment entries and
+// whether the container exists. Missing container: (nil, false, nil).
+// Used by internal/tokenres to reuse tokens from an existing universal-node
+// container (the container IS the secret store, v0.1.1).
+func (c *Client) InspectEnv(ctx context.Context, name string) ([]string, bool, error) {
+	inspected, err := c.cli.ContainerInspect(ctx, name)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("inspecting container %s: %w", name, err)
+	}
+	if inspected.Config == nil {
+		return nil, true, nil
+	}
+	return inspected.Config.Env, true, nil
+}
+
+// ContainerExists reports whether a container with the given name exists
+// in any state.
+func (c *Client) ContainerExists(ctx context.Context, name string) (bool, error) {
+	_, exists, err := c.lookupContainer(ctx, name)
+	return exists, err
+}
+
+// StartContainer starts an existing (stopped) container as-is — no recreate,
+// so its env (bridge token, MCP bearer) stays untouched.
+func (c *Client) StartContainer(ctx context.Context, name string) error {
+	if err := c.cli.ContainerStart(ctx, name, container.StartOptions{}); err != nil {
+		return fmt.Errorf("starting container %s: %w", name, err)
+	}
+	return nil
+}
+
+// lookupContainer finds the named container via the list API.
+func (c *Client) lookupContainer(ctx context.Context, name string) (*types.Container, bool, error) {
 	cts, err := c.cli.ContainerList(ctx, container.ListOptions{
 		All:     true,
 		Filters: filters.NewArgs(filters.Arg("name", name)),
 	})
 	if err != nil {
-		return false, fmt.Errorf("listing containers: %w", err)
+		return nil, false, fmt.Errorf("listing containers: %w", err)
 	}
-	for _, ct := range cts {
-		for _, n := range ct.Names {
+	for i := range cts {
+		for _, n := range cts[i].Names {
 			if n == "/"+name || n == name {
-				return ct.State == "running", nil
+				return &cts[i], true, nil
 			}
 		}
 	}
-	return false, nil
+	return nil, false, nil
 }
 
 // Exec runs a command inside the container and returns the demultiplexed
