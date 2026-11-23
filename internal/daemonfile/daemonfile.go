@@ -1,19 +1,19 @@
 // Package daemonfile writes the reverse workspace channel (board T-026):
 // after a successful bootstrap the daemon records its bridge endpoint as
-// ``<workspace>/bridge/daemon.json`` so the node container can adopt it.
+// `<workspace>/bridge/daemon.json` so the node container can adopt it.
 //
-// Why: a container that the user re-created by hand (``docker compose up``
-// without the token envs) carries no ``IOWAP_BRIDGE_TOKEN``, and the
+// Why: a container that the user re-created by hand (`docker compose up`
+// without the token envs) carries no `IOWAP_BRIDGE_TOKEN`, and the
 // daemon starts existing containers as-is (DEC #6, never recreated) — the
 // env-injection path can therefore not fix such a container. The shared
 // workspace volume is the channel that survives every recreate (same
 // pattern as the T-022 providers.yaml channel, in reverse): the daemon
 // writes {url, token}, the node polls the file and writes the values into
-// its node.yaml ``bridge:`` block (nodes/common/daemon_channel.py).
+// its node.yaml `bridge:` block (nodes/common/daemon_channel.py).
 //
 // The URL uses the established convention from the docs/README (T-005/
 // T-009): the bridge API listens on 127.0.0.1:<port> on the host, and the
-// container reaches the host via ``host.docker.internal`` — provided
+// container reaches the host via `host.docker.internal` — provided
 // natively by Docker Desktop, mapped to the host gateway by the
 // extra_hosts entry of the universal-node compose profile.
 package daemonfile
