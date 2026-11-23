@@ -71,6 +71,22 @@ the daemon no longer *demands* the token from the user; it resolves it:
    (never crashes, never serves an empty manifest over a broken file);
    when the workspace file disappears, the config-dir registry
    (`IOWAP_PROVIDERS_FILE`) takes over again.
+   **Bridge channel to the node (`internal/daemonfile`, board T-026)** —
+   after every successful bootstrap the daemon also writes
+   `<workspace>/bridge/daemon.json`:
+
+   ```json
+   { "url": "http://host.docker.internal:7780", "token": "<IOWAP_BRIDGE_TOKEN>" }
+   ```
+
+   This is the providers.yaml channel in reverse: the daemon tells the node
+   which bridge URL and token to use. It fixes containers that were
+   re-created by hand (`docker compose up` without the token envs) — the
+   daemon starts existing containers as-is (DEC #6), so env injection alone
+   cannot reach them. The node polls this file (10 s) and adopts `url` +
+   `token` into its node.yaml `bridge:` block. Written atomically (temp +
+   rename), after the workspace directory exists; a write failure is logged
+   as a warning and never stops the daemon.
 4. **Bridge API** on `127.0.0.1:7780` (below), plus the **tray icon**
    (Windows — see below).
 

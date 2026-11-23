@@ -26,6 +26,7 @@ import (
 	"github.com/iowap-org/iowap-bridge-daemon/internal/bootstrap"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/config"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/console"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/daemonfile"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/dockerx"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/logging"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/openbrowser"
@@ -115,6 +116,21 @@ func main() {
 	}
 	if result.Restarted {
 		log.Printf("iowap-bridge: existing container %s restarted as-is — tokens unchanged", bootstrap.ContainerName)
+	}
+
+	// ── Reverse workspace channel (T-026): after a successful bootstrap,
+	// record the bridge endpoint as <workspace>/bridge/daemon.json. A
+	// container re-created by hand (compose up without the token envs)
+	// carries no IOWAP_BRIDGE_TOKEN, and the daemon starts existing
+	// containers as-is (DEC #6) — the shared workspace volume is the only
+	// channel that survives every recreate. The node polls the file and
+	// adopts url/token into its node.yaml bridge block. The token is never
+	// logged. Best-effort: a write failure must not take the daemon down.
+	channelPath, err := daemonfile.Write(workspace, daemonfile.ManifestURL(cfg.Port), tokens.BridgeToken)
+	if err != nil {
+		log.Printf("iowap-bridge: warning: could not write the bridge channel file: %v — configure the node's bridge block manually", err)
+	} else {
+		log.Printf("iowap-bridge: bridge endpoint published to %s — the node adopts it on its next poll", channelPath)
 	}
 
 	// ── Hand-off to the node-side onboarding UI (v0.2.0, board T-017/T-018):
