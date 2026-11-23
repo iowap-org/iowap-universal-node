@@ -70,7 +70,7 @@ jobs:
                   -H "Accept: application/octet-stream" -o "dist/$a" {}
           done
           ls -la dist/
-      - name: Upload to Nextcloud (Shared/iowap-bridge/)
+      - name: Upload to Nextcloud (Shared/iowap-bridge/ + versioned folder)
         env:
           NC_HOST: ${{ secrets.NEXTCLOUD_HOST }}
           NC_USER: ${{ secrets.NEXTCLOUD_USERNAME }}
@@ -79,15 +79,24 @@ jobs:
           set -euo pipefail
           # NC_HOST may or may not carry a scheme — strip any, re-add one.
           BASE="https://${NC_HOST#*//}"
-          curl -s -o /dev/null -u "${NC_USER}:${NC_PASS}" -X MKCOL \
-            "${BASE}/remote.php/dav/files/${NC_USER}/Shared/iowap-bridge" || true
+          AUTH="${NC_USER}:${NC_PASS}"
+          ROOT="${BASE}/remote.php/dav/files/${NC_USER}/Shared/iowap-bridge"
+          TAG="${GITHUB_REF_NAME}"
+          # Stable "latest" paths + a per-version archive folder that is
+          # never overwritten (Ronny: "leg immer einen neuen versions ordner an").
+          for dir in "$ROOT" "$ROOT/$TAG"; do
+            curl -s -o /dev/null -u "$AUTH" -X MKCOL "$dir" || true
+          done
           for f in dist/*; do
             name="$(basename "$f")"
-            code="$(curl -s -o /dev/null -w '%{http_code}' -u "${NC_USER}:${NC_PASS}" \
-              -T "$f" "${BASE}/remote.php/dav/files/${NC_USER}/Shared/iowap-bridge/${name}")"
-            echo "${name} -> ${code}"
-            [ "$code" = "201" ] || [ "$code" = "204" ]
+            for target in "$ROOT" "$ROOT/$TAG"; do
+              code="$(curl -s -o /dev/null -w '%{http_code}' -u "$AUTH" \
+                -T "$f" "${target}/${name}")"
+              echo "${target##*/}/${name} -> ${code}"
+              [ "$code" = "201" ] || [ "$code" = "204" ]
+            done
           done
-          printf '%s\n' "${GITHUB_REF_NAME}" | curl -s -o /dev/null -w 'VERSION.txt -> %{http_code}\n' \
-            -u "${NC_USER}:${NC_PASS}" -T - \
-            "${BASE}/remote.php/dav/files/${NC_USER}/Shared/iowap-bridge/VERSION.txt"
+          printf '%s\n' "$TAG" | curl -s -o /dev/null -w 'latest VERSION.txt -> %{http_code}\n' \
+            -u "$AUTH" -T - "$ROOT/VERSION.txt"
+          printf '%s\n' "$TAG" | curl -s -o /dev/null -w 'versioned VERSION.txt -> %{http_code}\n' \
+            -u "$AUTH" -T - "$ROOT/$TAG/VERSION.txt"
