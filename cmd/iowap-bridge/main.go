@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -24,7 +25,9 @@ import (
 
 	"github.com/iowap-org/iowap-bridge-daemon/internal/bootstrap"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/config"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/console"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/dockerx"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/logging"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/openbrowser"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provider"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provision"
@@ -35,6 +38,16 @@ import (
 )
 
 func main() {
+	// ── Console visibility (v0.3.1, Ronny feedback #2): release builds run
+	// windowless (windowsgui subsystem, see release.yml). --debug or
+	// IOWAP_BRIDGE_DEBUG=1 allocates a console; without it, bootstrap
+	// messages additionally land in %LOCALAPPDATA%\iowap-bridge\daemon.log.
+	// Must run before any logging so even the earliest failure is visible
+	// somewhere.
+	debug := console.Debug(os.Args[1:], os.Getenv)
+	console.Show(debug)
+	setLogOutput(debug)
+
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "iowap-bridge: refusing to start: %v\n", err)
@@ -171,6 +184,27 @@ func main() {
 	if err := http.Serve(ln, srv.Handler()); err != nil {
 		log.Fatalf("iowap-bridge: server error: %v", err)
 	}
+}
+
+// setLogOutput routes the standard logger. In debug mode stderr stays the
+// sink (the console is visible). Without it, messages additionally append
+// to %LOCALAPPDATA%\iowap-bridge\daemon.log (file first in the MultiWriter
+// so a failed stderr write — invalid handle on windowsgui — never eats a
+// log line). Best effort: a broken log dir never keeps the daemon from
+// starting; logging then stays stderr-only.
+func setLogOutput(debug bool) {
+	if debug {
+		return
+	}
+	path, err := logging.ResolvePath(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return
+	}
+	f, err := logging.Open(path, logging.MaxLogSize)
+	if err != nil {
+		return
+	}
+	log.SetOutput(io.MultiWriter(f, os.Stderr))
 }
 
 // trayController adapts the dockerx client method names onto the tray's

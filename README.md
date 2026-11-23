@@ -80,11 +80,22 @@ the daemon no longer *demands* the token from the user; it resolves it:
 > the node-side onboarding UI at `http://127.0.0.1:7783` (served inside the
 > `iowap-universal-node` container).
 
-## Tray icon (Windows, board T-023)
+## Tray & exe icon (Windows, board T-023, v0.3.1)
 
 The daemon adds a system tray icon (`fyne.io/systray` — pure Go on
 Windows, no CGO). The tray runs in its own goroutine and is best-effort:
 any tray failure or panic is logged, the bridge daemon keeps serving.
+
+Since v0.3.1 the tray shows the real IOWAP icon (multi-size
+`assets/iowap.ico`, 16–256 px — host tower in cornflower blue, cluster
+tower in lavender, segmented arch on a dark plate), embedded into the
+binary via `go:embed`. The same asset is compiled into the exe as a
+Windows resource (`rsrc_windows_amd64.syso`, generated with
+`github.com/akavel/rsrc`), so Explorer, Taskbar and shortcuts show the
+icon as well. The tray embeds a byte-identical copy of the asset
+(`internal/tray/icon.ico`) because `go:embed` cannot reference parent
+directories — `internal/tray/icon_test.go` fails the build when the two
+drift apart.
 
 **Status widget** (disabled header lines in the menu, refreshed every
 5 s): container state (`running`/`stopped` via the Docker Engine),
@@ -122,6 +133,37 @@ buildable and CGO-free; CI runs the full suite there).
 | 7781  | HTTP MCP endpoint (agents → node container)    | 127.0.0.1   |
 | 7783  | Node onboarding UI + bearer/snippet display (node container, board T-017) | 127.0.0.1   |
 
+## Console window & daemon.log (v0.3.1)
+
+A double-click on the released exe starts the daemon **windowless**: the
+release build uses the `windowsgui` subsystem (release.yml,
+`-ldflags "-s -w -H=windowsgui"`), so the OS never creates a console — no
+window, no flash, just the tray icon. This was a deliberate choice over
+the console-subsystem + `ShowWindow(SW_HIDE)` alternative, which creates
+a console first and hides it (visible flash on some Windows versions).
+
+Debugging is opt-in per run:
+
+* `iowap-bridge.exe --debug` (command-line flag), or
+* `IOWAP_BRIDGE_DEBUG=1` (environment variable, truthy values
+  `1`/`true`/`yes`/`on`)
+
+With debug set, the daemon allocates a console (`AllocConsole` in
+`internal/console`) and all bootstrap/tray/watch messages appear there.
+
+Without the flag the same messages additionally go to a log file next to
+the config dir:
+
+```
+%LOCALAPPDATA%\iowap-bridge\daemon.log
+```
+
+Append mode, simple rotation at 5 MB (the current file becomes
+`daemon.log.1`). Logging setup is best-effort — an unwritable log dir
+never keeps the daemon from starting. Note: a local dev build (`go run` /
+`go build` without `-H=windowsgui`) has a normal console attached; there
+`--debug` reuses it and a non-debug run still shows its console.
+
 ## Build & Run
 
 Requires Go 1.23+ (or Docker: `docker run --rm -v "$PWD":/app -w /app golang:1.23 go build ./cmd/iowap-bridge`).
@@ -139,6 +181,7 @@ go run ./cmd/iowap-bridge
 | `IOWAP_BRIDGE_PORT`    | no       | `7780`                    | TCP port. The daemon binds `127.0.0.1` only — never a foreign interface. |
 | `IOWAP_WORKSPACE_DIR`  | no       | `./workspace`             | Workspace root; must be the same directory the node container mounts at `/workspace`. |
 | `IOWAP_PROVIDERS_FILE` | no       | `<configdir>/iowap-bridge/providers.yaml` | Provider registry (board T-019). Overridden by `<workspace>/bridge/providers.yaml` when that file exists (workspace watch, board T-022). Missing/empty → empty manifest. |
+| `IOWAP_BRIDGE_DEBUG`   | no       | unset                     | Show the console window and log verbosely to stderr (v0.3.1). Truthy values: `1`/`true`/`yes`/`on`. Equivalent to the `--debug` flag. Without it, logs go to `%LOCALAPPDATA%\iowap-bridge\daemon.log`. |
 | `IOWAP_MCP_PORT`       | —        | removed (v0.2.0)          | Was UI-snippet-only; the compose profile owns the real 7781 mapping. |
 
 ## Providers (providers.yaml)

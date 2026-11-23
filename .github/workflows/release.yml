@@ -28,7 +28,17 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -trimpath -ldflags "-s -w" -o iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/iowap-bridge
+        run: |
+          LDFLAGS="-s -w"
+          # windowsgui subsystem for the Windows release (v0.3.1): a
+          # double-click start shows NO console window — not even a flash,
+          # the OS never creates one. --debug / IOWAP_BRIDGE_DEBUG=1
+          # allocates one at runtime (internal/console); logs otherwise go
+          # to %LOCALAPPDATA%\iowap-bridge\daemon.log (internal/logging).
+          if [ "$GOOS" = "windows" ]; then
+            LDFLAGS="$LDFLAGS -H=windowsgui"
+          fi
+          go build -trimpath -ldflags "$LDFLAGS" -o iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/iowap-bridge
       - name: Checksum
         run: sha256sum iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} > iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}.sha256
       - name: Upload release assets
