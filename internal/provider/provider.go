@@ -73,6 +73,13 @@ type Capability struct {
 	InputSchema json.RawMessage
 	LongRun     bool
 	Health      string
+	// MaxParallel and Cost come from providers.yaml (board T-030: the
+	// Node dashboard writes max_parallel/cost). MaxParallel is the
+	// per-capability concurrency slot count, Cost the scheduling point
+	// cost. Both default to 1 — the registry normalizes them before the
+	// value reaches the manifest.
+	MaxParallel int
+	Cost        int
 }
 
 // Provider is one host capability source.

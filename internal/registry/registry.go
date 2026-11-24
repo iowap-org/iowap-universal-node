@@ -44,6 +44,13 @@ type entry struct {
 	// sanitized) this provider's Exec runs in.
 	Workspace string `yaml:"workspace"`
 
+	// Scheduling hints (board T-030): max_parallel is the number of
+	// concurrent exec slots the node may use for this capability, cost
+	// the point cost per task. Both are tolerant of missing/0/negative/
+	// non-numeric values and default to 1 (see flexInt + normalize).
+	MaxParallel flexInt `yaml:"max_parallel"`
+	Cost        flexInt `yaml:"cost"`
+
 	// type: comfyui
 	URL      string `yaml:"url"`
 	StartCmd string `yaml:"start_cmd"`
@@ -65,6 +72,31 @@ type execConf struct {
 	BodyTemplate  string            `yaml:"body_template"`
 	ResultPath    string            `yaml:"result_path"`
 	ArtifactPaths []string          `yaml:"artifact_paths"`
+}
+
+// flexInt decodes an optional YAML integer without turning garbage into a
+// config error: the Node dashboard (board T-030) writes max_parallel/cost,
+// and a stray non-numeric value must degrade to the default (1) instead of
+// refusing daemon startup. Any decode failure leaves the zero value, which
+// normalize() maps to 1.
+type flexInt int
+
+func (f *flexInt) UnmarshalYAML(value *yaml.Node) error {
+	var n int
+	if err := value.Decode(&n); err != nil {
+		*f = 0
+		return nil // tolerated: normalize() applies the default
+	}
+	*f = flexInt(n)
+	return nil
+}
+
+// normalizeInt maps missing/zero/negative values to the default of 1.
+func normalizeInt(f flexInt) int {
+	if f < 1 {
+		return 1
+	}
+	return int(f)
 }
 
 // Load parses the providers file and instantiates one provider.Provider
@@ -150,12 +182,14 @@ func Load(path string) ([]provider.Provider, error) {
 		}
 
 		provs = append(provs, &configured{
-			inner:     inner,
-			name:      name,
-			summary:   e.Summary,
-			schema:    schemaJSON(e),
-			longRun:   e.LongRun,
-			workspace: workspace,
+			inner:       inner,
+			name:        name,
+			summary:     e.Summary,
+			schema:      schemaJSON(e),
+			longRun:     e.LongRun,
+			workspace:   workspace,
+			maxParallel: normalizeInt(e.MaxParallel),
+			cost:        normalizeInt(e.Cost),
 		})
 	}
 	return provs, nil
@@ -200,6 +234,11 @@ type configured struct {
 	schema    json.RawMessage
 	longRun   bool // applied as an explicit override only when true
 	workspace string
+	// Scheduling hints (board T-030), already normalized by Load
+	// (missing/0/negative/garbage → 1). Applied to every provider type
+	// centrally, so comfyui/http/process entries all carry them.
+	maxParallel int
+	cost        int
 }
 
 func (c *configured) Capability() provider.Capability {
@@ -214,6 +253,8 @@ func (c *configured) Capability() provider.Capability {
 	if c.longRun {
 		capability.LongRun = true
 	}
+	capability.MaxParallel = c.maxParallel
+	capability.Cost = c.cost
 	return capability
 }
 

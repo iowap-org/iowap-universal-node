@@ -119,6 +119,8 @@ func TestManifestShape(t *testing.T) {
 			InputSchema json.RawMessage `json:"input_schema"`
 			LongRun     bool            `json:"long_run"`
 			Health      string          `json:"health"`
+			MaxParallel int             `json:"max_parallel"`
+			Cost        int             `json:"cost"`
 		} `json:"capabilities"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
@@ -145,6 +147,11 @@ func TestManifestShape(t *testing.T) {
 	}
 	if cap.Health != "ok" {
 		t.Errorf("cap health = %q, want ok", cap.Health)
+	}
+	// Scheduling hints (board T-030): the stub leaves both fields at 0,
+	// the manifest must still emit the default of 1 — never a raw 0.
+	if cap.MaxParallel != 1 || cap.Cost != 1 {
+		t.Errorf("max_parallel/cost = %d/%d, want default 1/1", cap.MaxParallel, cap.Cost)
 	}
 	var schema map[string]any
 	if err := json.Unmarshal(cap.InputSchema, &schema); err != nil {
@@ -175,6 +182,31 @@ func TestManifestHealthDown(t *testing.T) {
 	}
 	if len(m.Capabilities) != 1 || m.Capabilities[0]["health"] != "down" {
 		t.Errorf("capabilities = %v, want one cap with health=down", m.Capabilities)
+	}
+}
+
+// Explicit scheduling hints from a provider pass through unchanged —
+// only values below 1 are coerced to the default.
+func TestManifestSchedulingValues(t *testing.T) {
+	p := newComfyStub()
+	p.cap.MaxParallel = 3
+	p.cap.Cost = 7
+	s := newTestServer(t, p)
+	rec := doReq(t, s, "GET", "/v1/manifest", testToken, "")
+	var m struct {
+		Capabilities []struct {
+			MaxParallel int `json:"max_parallel"`
+			Cost        int `json:"cost"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("manifest not JSON: %v", err)
+	}
+	if len(m.Capabilities) != 1 {
+		t.Fatalf("capabilities = %d, want 1", len(m.Capabilities))
+	}
+	if m.Capabilities[0].MaxParallel != 3 || m.Capabilities[0].Cost != 7 {
+		t.Errorf("max_parallel/cost = %d/%d, want 3/7", m.Capabilities[0].MaxParallel, m.Capabilities[0].Cost)
 	}
 }
 

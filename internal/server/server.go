@@ -19,7 +19,7 @@ import (
 )
 
 // Version is the daemon version reported in the manifest.
-const Version = "0.3.2"
+const Version = "0.3.3"
 
 // ProviderName is the manifest provider name.
 const ProviderName = "iowap-bridge"
@@ -165,6 +165,15 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		if capability.Health == "" {
 			capability.Health = provider.HealthOK
 		}
+		// Scheduling hints (board T-030): the registry normalizes these,
+		// but providers registered directly (without the registry) must
+		// not leak 0 into the manifest either — default to 1.
+		if capability.MaxParallel < 1 {
+			capability.MaxParallel = 1
+		}
+		if capability.Cost < 1 {
+			capability.Cost = 1
+		}
 		schema := capability.InputSchema
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{},"required":[]}`)
@@ -175,6 +184,10 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 			"input_schema": json.RawMessage(schema),
 			"long_run":     capability.LongRun,
 			"health":       capability.Health,
+			// Scheduling hints (board T-030): the registry normalizes
+			// both to >= 1, so they are always present and valid.
+			"max_parallel": capability.MaxParallel,
+			"cost":         capability.Cost,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

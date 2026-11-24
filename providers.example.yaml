@@ -17,6 +17,10 @@
 #              object schema is published otherwise)
 #   workspace — optional subdirectory of the daemon workspace this
 #              provider's tasks run in (artifacts land there)
+#   max_parallel — concurrent exec slots the node may use for this
+#              capability (optional; missing/0/negative → 1)
+#   cost      — scheduling point cost per task (optional; missing/0/
+#              negative → 1)
 
 providers:
 

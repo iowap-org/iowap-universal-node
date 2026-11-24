@@ -79,6 +79,88 @@ func TestLoadInvalid(t *testing.T) {
 	}
 }
 
+// --- Scheduling hints (board T-030) -----------------------------------------
+
+// Entries without max_parallel/cost default both fields to 1 — across all
+// three provider types, since the configured wrapper applies them centrally.
+func TestLoadSchedulingDefaults(t *testing.T) {
+	p := write(t, `
+providers:
+  - type: comfyui
+    url: http://127.0.0.1:8188
+  - name: api.cap
+    type: http
+    exec:
+      url_template: http://x/{{task_id}}
+  - name: script.cap
+    type: process
+    command: [sh, -c, "true"]
+`)
+	provs, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(provs) != 3 {
+		t.Fatalf("providers = %d, want 3", len(provs))
+	}
+	for i, prov := range provs {
+		cap := prov.Capability()
+		if cap.MaxParallel != 1 || cap.Cost != 1 {
+			t.Errorf("provider %d: max_parallel/cost = %d/%d, want 1/1", i, cap.MaxParallel, cap.Cost)
+		}
+	}
+}
+
+// Explicit max_parallel/cost values land in the capability unchanged.
+func TestLoadSchedulingValues(t *testing.T) {
+	p := write(t, `
+providers:
+  - name: script.cap
+    type: process
+    command: [sh, -c, "true"]
+    max_parallel: 4
+    cost: 5
+`)
+	provs, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cap := provs[0].Capability()
+	if cap.MaxParallel != 4 || cap.Cost != 5 {
+		t.Errorf("max_parallel/cost = %d/%d, want 4/5", cap.MaxParallel, cap.Cost)
+	}
+}
+
+// Zero, negative and non-numeric values all degrade to the default of 1
+// instead of failing daemon startup (the Node dashboard writes the fields;
+// a stray value must not take the whole registry down).
+func TestLoadSchedulingTolerant(t *testing.T) {
+	cases := []struct {
+		name, yaml string
+	}{
+		{"zero", "max_parallel: 0\ncost: 0\n"},
+		{"negative", "max_parallel: -2\ncost: -7\n"},
+		{"garbage strings", "max_parallel: \"abc\"\ncost: \"x\"\n"},
+		{"garbage mapping", "max_parallel: {a: 1}\ncost: [1, 2]\n"},
+	}
+	for _, c := range cases {
+		p := write(t, `
+providers:
+  - name: script.cap
+    type: process
+    command: [sh, -c, "true"]
+`+c.yaml)
+		provs, err := Load(p)
+		if err != nil {
+			t.Fatalf("%s: Load: %v", c.name, err)
+		}
+		cap := provs[0].Capability()
+		if cap.MaxParallel != 1 || cap.Cost != 1 {
+			t.Errorf("%s: max_parallel/cost = %d/%d, want 1/1", c.name, cap.MaxParallel, cap.Cost)
+		}
+	}
+}
+
 // --- Provider instantiation -------------------------------------------------------
 
 // A comfyui entry instantiates the built-in ComfyUI provider with the

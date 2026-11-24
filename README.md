@@ -206,7 +206,11 @@ Every entry becomes one manifest capability. Common fields:
 `name` (capability name, pattern `^[a-z][a-z0-9_.-]{1,63}$`, node-side
 `host.` prefix), `summary`, `long_run`, `input_schema` (JSON Schema for
 the params object), `workspace` (optional subdirectory of the workspace
-root this provider's tasks run in; self-creating).
+root this provider's tasks run in; self-creating), plus the scheduling
+hints `max_parallel` (concurrent exec slots the node may use for this
+capability) and `cost` (scheduling point cost per task) — both integers,
+missing/0/negative/non-numeric values default to 1 (board T-030: the Node
+dashboard writes these fields into the workspace providers.yaml).
 
 ### `type: comfyui`
 
@@ -297,7 +301,9 @@ comparison).
       "summary": "Generate images with the local ComfyUI installation (Stable Diffusion)",
       "input_schema": { "type": "object", "properties": { "workflow": { "type": "object" } }, "required": ["workflow"] },
       "long_run": true,
-      "health": "ok"
+      "health": "ok",
+      "max_parallel": 1,
+      "cost": 1
     }
   ]
 }
