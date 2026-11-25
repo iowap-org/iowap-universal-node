@@ -327,3 +327,56 @@ providers:
 		t.Errorf("names = %q, %q", provs[0].Capability().Name, provs[1].Capability().Name)
 	}
 }
+
+// --- Instantiate (spec-exec factory, board T-044) -------------------------------
+
+// The spec mapping decodes through the SAME entry schema as providers.yaml
+// (snake_case fields; JSON is a YAML subset): typed fields land on the
+// runner, unknown keys are dropped, and the URL name overrides any spec
+// name.
+func TestInstantiateSpecDecodesEntrySchema(t *testing.T) {
+	spec := map[string]any{
+		"name":         "deliberately.wrong",
+		"type":         "process",
+		"command":      []any{"echo", "spec-built"},
+		"stdin_json":   false,
+		"workspace":    "spec-out",
+		"max_parallel": float64(3),
+		"summary":      "from spec",
+	}
+	p, err := Instantiate("spec.cap", spec)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	cap := p.Capability()
+	if cap.Name != "spec.cap" {
+		t.Errorf("capability name = %q, want spec.cap (URL label overrides spec name)", cap.Name)
+	}
+	if cap.Summary != "from spec" {
+		t.Errorf("summary = %q, want from spec", cap.Summary)
+	}
+	result, _, err2 := p.Exec(context.Background(), "t1", json.RawMessage("{}"), 10*time.Second, t.TempDir())
+	if err2 != nil {
+		t.Fatalf("Exec: %v", err2)
+	}
+	if result["stdout"] != "spec-built" {
+		t.Errorf("stdout = %v, want spec-built", result["stdout"])
+	}
+}
+
+// Unknown keys in the spec are dropped (never invented at the runner),
+// and mis-shaped specs fail loudly — the server maps the error to 422.
+func TestInstantiateSpecErrors(t *testing.T) {
+	if _, err := Instantiate("bad@name", map[string]any{"type": "process", "command": []any{"echo"}}); err == nil {
+		t.Error("invalid capability name: want error, got nil")
+	}
+	if _, err := Instantiate("x.cap", map[string]any{"type": "smoke_signal"}); err == nil {
+		t.Error("unknown type: want error, got nil")
+	} else if !strings.Contains(err.Error(), "smoke_signal") {
+		t.Errorf("unknown-type error %q does not mention the type", err)
+	}
+	// Unknown keys ignored: the same entry with an extra key still builds.
+	if _, err := Instantiate("x.cap", map[string]any{"type": "process", "command": []any{"echo"}, "some_future_field": true}); err != nil {
+		t.Errorf("unknown spec key = unexpected error: %v", err)
+	}
+}

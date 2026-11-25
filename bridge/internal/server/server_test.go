@@ -354,3 +354,193 @@ func TestExecRejectsArtifactPathTraversal(t *testing.T) {
 		}
 	}
 }
+
+// --- Spec-mode exec (board T-044, exec contract v1.1) ------------------------
+
+// (a) spec-exec process happy path: the daemon builds the provider from
+// the SPEC (no registry entry involved) and echoes the command's stdout.
+func TestExecSpecProcessHappy(t *testing.T) {
+	s := newTestServer(t, newComfyStub()) // registry holds only comfy.generate
+	body := `{"task_id":"t-spec","params":{},"timeout_s":30,
+	          "spec":{"name":"sys.run","type":"process","command":["echo","hello-spec"],"stdin_json":false}}`
+	rec := doReq(t, s, "POST", "/v1/exec/sys.run", testToken, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("spec exec = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Bridge-Exec"); got != "spec" {
+		t.Errorf("X-Bridge-Exec = %q, want spec", got)
+	}
+	var resp struct {
+		Status string         `json:"status"`
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if resp.Status != "completed" {
+		t.Errorf("status = %q (body: %s), want completed", resp.Status, rec.Body.String())
+	}
+	if resp.Result["stdout"] != "hello-spec" {
+		t.Errorf("result.stdout = %v, want hello-spec", resp.Result["stdout"])
+	}
+}
+
+// (b) spec-exec ignores the registry: the capability name is completely
+// unknown at this provider and the task STILL runs.
+func TestExecSpecIgnoresRegistry(t *testing.T) {
+	s := newTestServer(t, newComfyStub())
+	body := `{"task_id":"t-spec","params":{},"timeout_s":10,
+	          "spec":{"type":"process","command":["echo","no-registry-needed"],"stdin_json":false}}`
+	rec := doReq(t, s, "POST", "/v1/exec/never.registered", testToken, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("spec exec on unknown name = %d, want 200 (no registry lookup, body: %s)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status string         `json:"status"`
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if resp.Status != "completed" || resp.Result["stdout"] != "no-registry-needed" {
+		t.Errorf("status/result = %q/%v, want completed/no-registry-needed", resp.Status, resp.Result["stdout"])
+	}
+}
+
+// (c) mis-shaped specs are a 422 (not the legacy 404, not a 200 "failed").
+func TestExecSpecInvalidShapes422(t *testing.T) {
+	s := newTestServer(t, newComfyStub())
+	cases := []struct {
+		name   string
+		spec   string
+		wantIn string
+	}{
+		{"unknown type", `{"type":"teleport"}`, "teleport"},
+		{"missing type", `{"command":["echo","x"]}`, "unknown provider type"},
+		{"process without command", `{"type":"process"}`, "command"},
+		{"empty command", `{"type":"process","command":[]}`, "command"},
+		{"http without exec", `{"type":"http"}`, "exec"},
+		{"http without url_template", `{"type":"http","exec":{"method":"GET"}}`, "url_template"},
+		{"comfyui without url", `{"type":"comfyui"}`, "url"},
+		{"unsafe workspace", `{"type":"process","command":["echo","x"],"workspace":"../escape"}`, "workspace"},
+	}
+	for _, c := range cases {
+		body := `{"task_id":"t-spec","params":{},"timeout_s":10,"spec":` + c.spec + `}`
+		rec := doReq(t, s, "POST", "/v1/exec/no.such.cap", testToken, body)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: spec exec = %d, want 422 (body: %s)", c.name, rec.Code, rec.Body.String())
+			continue
+		}
+		if got := rec.Header().Get("X-Bridge-Exec"); got != "" {
+			t.Errorf("%s: X-Bridge-Exec = %q, want absent", c.name, got)
+		}
+		var resp struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s: response not JSON: %v", c.name, err)
+		}
+		if resp.Error.Code != "spec.invalid" {
+			t.Errorf("%s: error.code = %q, want spec.invalid", c.name, resp.Error.Code)
+		}
+		if !strings.Contains(resp.Error.Message, c.wantIn) {
+			t.Errorf("%s: message %q does not mention %q", c.name, resp.Error.Message, c.wantIn)
+		}
+	}
+	// A spec that is not an object at all is also a 422.
+	rec := doReq(t, s, "POST", "/v1/exec/no.such.cap", testToken,
+		`{"task_id":"t-spec","params":{},"timeout_s":10,"spec":"echo x"}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("non-object spec = %d, want 422 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// (d) name-only legacy exec stays on the old registry path (pre-0.3.7
+// nodes keep working) and is marked deprecated via X-Bridge-Exec.
+func TestExecLegacyNameOnlyResolvesRegistry(t *testing.T) {
+	p := newComfyStub()
+	p.execFn = func(ctx context.Context, taskID string, params json.RawMessage, timeout time.Duration, ws string) (map[string]any, []provider.Artifact, *provider.ExecError) {
+		return map[string]any{"via": "registry"}, nil, nil
+	}
+	s := newTestServer(t, p)
+	rec := doReq(t, s, "POST", "/v1/exec/comfy.generate", testToken,
+		`{"task_id":"t1","params":{},"timeout_s":10}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy exec = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Bridge-Exec"); got != "legacy" {
+		t.Errorf("X-Bridge-Exec = %q, want legacy (deprecation note)", got)
+	}
+	var resp struct {
+		Status string         `json:"status"`
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if resp.Status != "completed" || resp.Result["via"] != "registry" {
+		t.Errorf("status/result = %q/%v, want completed/registry", resp.Status, resp.Result["via"])
+	}
+	// And the unknown-name behavior is unchanged for name-only execs.
+	rec = doReq(t, s, "POST", "/v1/exec/no.such.cap", testToken,
+		`{"task_id":"t1","params":{},"timeout_s":10}`)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("legacy unknown name = %d, want 404", rec.Code)
+	}
+}
+
+// (e) bearer auth covers the spec path exactly like the legacy path.
+func TestExecSpecBearerUnchanged(t *testing.T) {
+	s := newTestServer(t, newComfyStub())
+	body := `{"task_id":"t-spec","params":{},"timeout_s":10,"spec":{"type":"process","command":["echo","x"],"stdin_json":false}}`
+	for _, token := range []string{"", "wrong-token"} {
+		rec := doReq(t, s, "POST", "/v1/exec/never.registered", token, body)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("spec exec with token %q = %d, want 401", token, rec.Code)
+		}
+		if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
+			t.Errorf("spec exec with token %q: WWW-Authenticate = %q, want Bearer", token, got)
+		}
+	}
+}
+
+// (f) params and task_id reach the spec-built runner: params ride the
+// stdin JSON pipe, task_id is substituted into the argv template.
+func TestExecSpecForwardsParamsAndTaskID(t *testing.T) {
+	s := newTestServer(t, newComfyStub())
+	// stdin_json defaults to true when absent — params arrive as JSON.
+	rec := doReq(t, s, "POST", "/v1/exec/stdin.cap", testToken,
+		`{"task_id":"t1","params":{"k":"v"},"timeout_s":10,"spec":{"type":"process","command":["cat"]}}`)
+	var first struct {
+		Status string         `json:"status"`
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &first); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if rec.Code != http.StatusOK || first.Status != "completed" {
+		t.Fatalf("cat spec exec = %d/%q (body: %s)", rec.Code, first.Status, rec.Body.String())
+	}
+	if first.Result["stdout"] != `{"k":"v"}` {
+		t.Errorf("params stdout = %v, want {\"k\":\"v\"}", first.Result["stdout"])
+	}
+	// argv template substitution carries task_id.
+	rec = doReq(t, s, "POST", "/v1/exec/subst.cap", testToken,
+		`{"task_id":"t-sf1","params":{},"timeout_s":10,"spec":{"type":"process","command":["echo","{{task_id}}"],"stdin_json":false}}`)
+	var second struct {
+		Status string         `json:"status"`
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &second); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if rec.Code != http.StatusOK || second.Status != "completed" {
+		t.Fatalf("echo spec exec = %d/%q (body: %s)", rec.Code, second.Status, rec.Body.String())
+	}
+	if second.Result["stdout"] != "t-sf1" {
+		t.Errorf("task_id stdout = %v, want t-sf1", second.Result["stdout"])
+	}
+}

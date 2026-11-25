@@ -1,14 +1,32 @@
-package registry
+package registry_test
 
 import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/iowap-org/iowap-bridge-daemon/internal/registry"
 	"github.com/iowap-org/iowap-bridge-daemon/internal/server"
 )
+
+// integration_test lives in the EXTERNAL test package (registry_test):
+// board T-044 made server import registry, so an internal test file here
+// importing server would be an import cycle in test. External test
+// packages are exempt — the prod dependency direction stays
+// server → registry (one provider factory), tests sit on top of both.
+
+func write(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "providers.yaml")
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
 
 // End-to-end: a providers.yaml with two http providers feeds server.New —
 // the manifest assembles from the registry and exec dispatches to the
@@ -38,7 +56,7 @@ providers:
       url_template: `+srvB.URL+`/run
       body_template: '{}'
 `)
-	provs, err := Load(p)
+	provs, err := registry.Load(p)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

@@ -99,6 +99,105 @@ func normalizeInt(f flexInt) int {
 	return int(f)
 }
 
+// instantiate builds the provider for ONE resolved capability name.
+// Shared by Load (file registry) and Instantiate (spec-exec, board T-044)
+// so both paths run the exact same type switch, wrapping and workspace
+// scoping — spec-exec must not become a second, divergent runner.
+func instantiate(name string, e entry) (provider.Provider, error) {
+	workspace := ""
+	if e.Workspace != "" {
+		ws, ok := provider.SanitizeRelPath(e.Workspace)
+		if !ok {
+			return nil, fmt.Errorf("workspace %q must be a safe workspace-relative path", e.Workspace)
+		}
+		workspace = ws
+	}
+
+	var inner provider.Provider
+	switch e.Type {
+	case "comfyui":
+		if e.URL == "" {
+			return nil, fmt.Errorf("type comfyui requires url")
+		}
+		inner = comfyui.New(e.URL, e.StartCmd)
+	case "http":
+		if e.Exec == nil {
+			return nil, fmt.Errorf("type http requires an exec mapping")
+		}
+		if e.Exec.URLTemplate == "" {
+			return nil, fmt.Errorf("type http requires exec.url_template")
+		}
+		inner = httpprovider.New(httpprovider.Config{
+			Name:          name,
+			Summary:       e.Summary,
+			LongRun:       e.LongRun,
+			Schema:        schemaJSON(e),
+			HealthURL:     e.HealthURL,
+			Method:        e.Exec.Method,
+			URLTemplate:   e.Exec.URLTemplate,
+			Headers:       e.Exec.Headers,
+			BodyTemplate:  e.Exec.BodyTemplate,
+			ResultPath:    e.Exec.ResultPath,
+			ArtifactPaths: e.Exec.ArtifactPaths,
+		})
+	case "process":
+		if len(e.Command) == 0 {
+			return nil, fmt.Errorf("type process requires command")
+		}
+		inner = process.New(process.Config{
+			Name:          name,
+			Summary:       e.Summary,
+			LongRun:       e.LongRun,
+			Schema:        schemaJSON(e),
+			Command:       e.Command,
+			StdinJSON:     e.StdinJSON,
+			ArtifactsGlob: e.ArtifactsGlob,
+		})
+	default:
+		return nil, fmt.Errorf("unknown provider type %q (want comfyui, http or process)", e.Type)
+	}
+
+	return &configured{
+		inner:       inner,
+		name:        name,
+		summary:     e.Summary,
+		schema:      schemaJSON(e),
+		longRun:     e.LongRun,
+		workspace:   workspace,
+		maxParallel: normalizeInt(e.MaxParallel),
+		cost:        normalizeInt(e.Cost),
+	}, nil
+}
+
+// Instantiate builds ONE provider directly from a spec mapping — exec
+// contract v1.1 "spec mode" (board T-044). The node resolves its registry
+// entry, copies it into the exec request body under `spec`, and the daemon
+// dispatches straight onto the type runner WITHOUT a registry lookup.
+//
+// The spec carries the SAME snake_case fields as the providers.yaml
+// entry (type, command, stdin_json, exec.url_template, url, workspace, …).
+// JSON is a YAML subset, so the mapping decodes through the regular
+// entry schema: unknown keys are dropped (never invented), absent
+// optional fields stay absent (no defaults at this layer). `name` is the
+// routing label from the URL — a spec-level name is overridden, never
+// merged. Mis-shaped specs (unknown type, missing required fields,
+// unsafe workspace) produce an error the caller maps to 422.
+func Instantiate(name string, spec map[string]any) (provider.Provider, error) {
+	if !provider.ValidCapName(name) {
+		return nil, fmt.Errorf("capability name %q does not match %s", name, provider.CapNamePattern)
+	}
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return nil, fmt.Errorf("encoding spec: %w", err)
+	}
+	var e entry
+	if err := yaml.Unmarshal(raw, &e); err != nil {
+		return nil, fmt.Errorf("spec is not a valid provider entry: %w", err)
+	}
+	e.Name = name
+	return instantiate(name, e)
+}
+
 // Load parses the providers file and instantiates one provider.Provider
 // per entry. See the package comment for the missing/empty/invalid
 // semantics.
@@ -127,70 +226,13 @@ func Load(path string) ([]provider.Provider, error) {
 			return nil, fmt.Errorf("%s: capability %q registered twice", where, name)
 		}
 		seen[name] = true
-
-		workspace := ""
-		if e.Workspace != "" {
-			ws, ok := provider.SanitizeRelPath(e.Workspace)
-			if !ok {
-				return nil, fmt.Errorf("%s: workspace %q must be a safe workspace-relative path", where, e.Workspace)
-			}
-			workspace = ws
+		// workspace / type validation + provider build live in instantiate
+		// (shared with the spec-exec path, board T-044).
+		p, err := instantiate(name, e)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", where, err)
 		}
-
-		var inner provider.Provider
-		switch e.Type {
-		case "comfyui":
-			if e.URL == "" {
-				return nil, fmt.Errorf("%s: type comfyui requires url", where)
-			}
-			inner = comfyui.New(e.URL, e.StartCmd)
-		case "http":
-			if e.Exec == nil {
-				return nil, fmt.Errorf("%s: type http requires an exec mapping", where)
-			}
-			if e.Exec.URLTemplate == "" {
-				return nil, fmt.Errorf("%s: type http requires exec.url_template", where)
-			}
-			inner = httpprovider.New(httpprovider.Config{
-				Name:          name,
-				Summary:       e.Summary,
-				LongRun:       e.LongRun,
-				Schema:        schemaJSON(e),
-				HealthURL:     e.HealthURL,
-				Method:        e.Exec.Method,
-				URLTemplate:   e.Exec.URLTemplate,
-				Headers:       e.Exec.Headers,
-				BodyTemplate:  e.Exec.BodyTemplate,
-				ResultPath:    e.Exec.ResultPath,
-				ArtifactPaths: e.Exec.ArtifactPaths,
-			})
-		case "process":
-			if len(e.Command) == 0 {
-				return nil, fmt.Errorf("%s: type process requires command", where)
-			}
-			inner = process.New(process.Config{
-				Name:          name,
-				Summary:       e.Summary,
-				LongRun:       e.LongRun,
-				Schema:        schemaJSON(e),
-				Command:       e.Command,
-				StdinJSON:     e.StdinJSON,
-				ArtifactsGlob: e.ArtifactsGlob,
-			})
-		default:
-			return nil, fmt.Errorf("%s: unknown provider type %q (want comfyui, http or process)", where, e.Type)
-		}
-
-		provs = append(provs, &configured{
-			inner:       inner,
-			name:        name,
-			summary:     e.Summary,
-			schema:      schemaJSON(e),
-			longRun:     e.LongRun,
-			workspace:   workspace,
-			maxParallel: normalizeInt(e.MaxParallel),
-			cost:        normalizeInt(e.Cost),
-		})
+		provs = append(provs, p)
 	}
 	return provs, nil
 }

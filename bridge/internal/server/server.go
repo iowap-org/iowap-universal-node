@@ -16,10 +16,11 @@ import (
 	"time"
 
 	"github.com/iowap-org/iowap-bridge-daemon/internal/provider"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/registry"
 )
 
 // Version is the daemon version reported in the manifest.
-const Version = "0.3.6"
+const Version = "0.3.7"
 
 // ProviderName is the manifest provider name.
 const ProviderName = "iowap-bridge"
@@ -205,7 +206,25 @@ type execRequest struct {
 	TaskID   string          `json:"task_id"`
 	Params   json.RawMessage `json:"params"`
 	TimeoutS *int            `json:"timeout_s"`
+	// Spec (board T-044, exec contract v1.1 "spec mode"): the node's
+	// registry entry for this capability, carried 1:1 (same snake_case
+	// fields as providers.yaml). Present → the daemon acts as a dumb
+	// executor: dispatch straight onto the type runner WITHOUT a registry
+	// lookup. Absent (or sent to an older daemon, which drops unknown
+	// body keys) → legacy name resolution below. Old nodes that omit the
+	// spec keep working unchanged.
+	//
+	// Decoded as RawMessage so a spec of the WRONG JSON type (string,
+	// array…) is a 422 "spec.invalid" instead of a 400 body error: the
+	// whole value is the spec, and "fix the spec" is what the node needs
+	// to know.
+	Spec json.RawMessage `json:"spec,omitempty"`
 }
+
+// codeSpecInvalid marks a mis-shaped spec in the 422 response. It is a
+// transport-level error like unauthorized/invalid_params — never a 200
+// "failed" body, because a wrong spec cannot heal on retry either.
+const codeSpecInvalid = "spec.invalid"
 
 type errorBody struct {
 	Code      string `json:"code"`
@@ -222,19 +241,6 @@ func failedBody(code, message string, retryable bool) map[string]any {
 
 func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	s.mu.RLock()
-	p, ok := s.providers[name]
-	s.mu.RUnlock()
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]any{
-			"error": map[string]any{
-				"code":    "capability.unknown",
-				"message": fmt.Sprintf("no capability %q at this provider", name),
-			},
-		})
-		return
-	}
-
 	var req execRequest
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&req); err != nil {
@@ -258,6 +264,63 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		timeout = time.Duration(*req.TimeoutS) * time.Second
+	}
+
+	var p provider.Provider
+	var specMap map[string]any
+	if len(req.Spec) > 0 && string(req.Spec) != "null" {
+		if err := json.Unmarshal(req.Spec, &specMap); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error": map[string]any{
+					"code":    codeSpecInvalid,
+					"message": fmt.Sprintf("invalid exec spec for %q: spec must be a provider entry object: %v", name, err),
+				},
+			})
+			return
+		}
+	}
+	if specMap != nil {
+		// Spec mode (board T-044, exec contract v1.1): dumb executor —
+		// dispatch onto the type runner exactly as specified, no registry
+		// knowledge, no unknown-name 404. Mis-shaped specs are a 422, not
+		// a 404: the runner never saw the request, so the node can tell
+		// "fix the spec" from "capability unknown".
+		// Security note: spec-exec does not expand trust. A node may
+		// POST /v1/exec/{name} with arbitrary params today = arbitrary
+		// argv templates / HTTP bodies via the registry; carrying the
+		// entry itself is the same script execution with one fewer
+		// lookup. Node trust was already complete.
+		built, err := registry.Instantiate(name, specMap)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error": map[string]any{
+					"code":    codeSpecInvalid,
+					"message": fmt.Sprintf("invalid exec spec for %q: %v", name, err),
+				},
+			})
+			return
+		}
+		p = built
+		w.Header().Set("X-Bridge-Exec", "spec")
+	} else {
+		// Legacy name-only exec: resolved through the registry like
+		// always, so pre-0.3.7 nodes keep working. Deprecation note in
+		// header + log — the spec path (exec contract v1.1) replaces it.
+		s.mu.RLock()
+		legacy, ok := s.providers[name]
+		s.mu.RUnlock()
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]any{
+				"error": map[string]any{
+					"code":    "capability.unknown",
+					"message": fmt.Sprintf("no capability %q at this provider", name),
+				},
+			})
+			return
+		}
+		p = legacy
+		log.Printf("bridge exec %q: legacy name-only exec (no spec in body) — deprecated, send the provider spec instead", name)
+		w.Header().Set("X-Bridge-Exec", "legacy")
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)

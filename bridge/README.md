@@ -316,7 +316,45 @@ then stops publishing the capability).
 
 ### `POST /v1/exec/{name}`
 
-Request: `{ "task_id": "...", "params": { ... }, "timeout_s": 3600 }`.
+Exec-Contract **v1.1 — spec mode** (board T-044, daemon ≥ 0.3.7). The
+daemon is a dumb executor: it runs the spec it is given and knows
+nothing about capability names beyond the route label.
+
+Request: `{ "task_id": "...", "params": { ... }, "timeout_s": 3600,
+"spec": { ... } }`.
+
+`spec` is the node's registry entry for the capability, carried 1:1 with
+the SAME snake_case fields as `providers.yaml`:
+
+| Field        | Applies to | Meaning                                                                 |
+|--------------|------------|-------------------------------------------------------------------------|
+| `type`       | all        | `comfyui` \| `http` \| `process` (required)                             |
+| `command`    | process    | argv template list, `{{param}}`/`{{task_id}}` substituted               |
+| `stdin_json` | process    | pipe params to stdin as JSON (default true)                             |
+| `artifacts_glob` | process | workspace-relative glob → artifact paths                             |
+| `exec`       | http       | `{method, url_template, headers, body_template, result_path, artifact_paths}` |
+| `health_url` | http       | (unused at exec time)                                                   |
+| `url`        | comfyui    | ComfyUI base URL                                                        |
+| `start_cmd`  | comfyui    | start-on-demand command                                                 |
+| `workspace`  | all        | workspace-relative subdirectory for artifacts (default: workspace root) |
+| `summary`, `long_run`, `input_schema`, `max_parallel`, `cost` | all | manifest metadata; irrelevant at exec time, ignored |
+
+Semantics:
+
+- `{name}` is only a routing label — the spec, not the registry, defines
+  what runs. A spec exec on a capability name unknown to the daemon
+  still runs (no 404 in the spec path).
+- Mis-shaped specs (unknown type, missing required fields, unsafe
+  `workspace`) → **HTTP 422** `{"error": {"code": "spec.invalid", ...}}`
+  — never the legacy 404 and never a 200 `"failed"` body: the runner
+  never saw the request and the node must fix the spec, not retry.
+- Legacy name-only bodies (no `spec` key) resolve through the registry
+  exactly like pre-0.3.7 daemons — old nodes keep working. Their
+  responses carry the deprecation marker `X-Bridge-Exec: legacy`
+  (spec responses: `X-Bridge-Exec: spec`); this path is superseded and
+  kept for release-coexistence only.
+- Sending the spec to an older daemon is harmless: unknown body keys
+  are ignored and the registry resolves as before.
 
 For `comfy.generate`, `params` must be `{"workflow": <ComfyUI API-format
 workflow>}` (the JSON from ComfyUI's "Save (API Format)"). The daemon
@@ -337,7 +375,9 @@ Response (task failure, HTTP 200): `{"status": "failed", "error": {"code": "..."
 | `provider.unavailable`  | yes       | The host application is not reachable      |
 | `timeout`               | yes       | The task did not finish within `timeout_s` |
 
-Unknown capability → HTTP 404.
+Unknown capability → HTTP 404 (legacy name-only execs only; a spec exec
+never 404s — it 200-completes, 200-fails on runner errors, or 422s on
+mis-shaped specs).
 
 ## Releases
 
