@@ -1,7 +1,7 @@
 [project]
 name = "iowap-node-mcp"
-version = "0.1.0"
-description = "IOWAP container MCP HTTP surface — Streamable HTTP /mcp + Bearer over the iowap-client-mcp toolset (T-037)"
+version = "0.1.1"
+description = "IOWAP container MCP HTTP surface — Streamable HTTP /mcp + Bearer over the iowap-client-mcp toolset + T-042 capability-manage tools"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

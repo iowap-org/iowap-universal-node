@@ -89,6 +89,12 @@ def build_http_app(
             "the 'mcp' package is not installed — "
             "install with: pip install 'iowap-node-mcp'"
         )
+    # T-042: attach the node-only capability-manage toolset (5 tools, see
+    # iowap_node_mcp.tools) on top of the client library's curated 9 — the
+    # node-HTTP surface is a strict superset of the stdio local-agent surface.
+    from iowap_node_mcp.tools import register_manage_tools
+
+    register_manage_tools(server)
     return server.streamable_http_app(host=host, json_response=True)
 
 

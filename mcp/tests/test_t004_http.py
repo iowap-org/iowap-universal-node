@@ -178,6 +178,8 @@ def test_http_200_initialize_with_bearer() -> None:
 def test_http_tools_discoverable() -> None:
     from iowap_client_mcp.tools import ALL_TOOLS
 
+    from iowap_node_mcp.tools import MANAGE_TOOLS
+
     app = build_http_app("sekrit")
     with _http_server(app) as base_url:
         session, url = _session_and_url(base_url, "sekrit")
@@ -189,8 +191,9 @@ def test_http_tools_discoverable() -> None:
         )
         assert status == 200, body
         names = {tool["name"] for tool in json.loads(body)["result"]["tools"]}
-        assert names == set(ALL_TOOLS)
-        assert len(names) == 9
+        # T-042: the node HTTP surface = client's curated 9 + 5 capability-manage.
+        assert names == set(ALL_TOOLS) | set(MANAGE_TOOLS)
+        assert len(names) == 14
 
 
 def test_http_allowlist_greps(monkeypatch, caplog) -> None:

@@ -36,12 +36,24 @@ iowap-node-mcp --http --host 0.0.0.0 --port 7781
 
 No duplicated tool code: `iowap-client-mcp` (>= 0.2.0) is a runtime
 dependency and this server wires its toolset into the Streamable-HTTP
-transport — the same 9 tools either way (`relay_status`, `node_list`,
-`capabilities_list`, `task_list`, `task_submit`, `task_result`,
-`artifact_download`, `artifact_link`, `docs`), with `IOWAP_ALLOW_CAPS`
-and the artifact-overwrite refusal applied unchanged. For tools, agents
-and MCP clients the surface is identical to before the split; only the
-package and release cadence differ.
+transport — the same 9 curated tools as the stdio path (`relay_status`,
+`node_list`, `capabilities_list`, `task_list`, `task_submit`,
+`task_result`, `artifact_download`, `artifact_link`, `docs`), with
+`IOWAP_ALLOW_CAPS` and the artifact-overwrite refusal applied unchanged.
+
+**T-042 (0.1.1):** the node-HTTP surface additionally serves the 5
+capability-manage tools, defined in `iowap_node_mcp/tools.py` and
+attached by `build_http_app` — `capability_create`, `capability_update`,
+`capability_delete` (destructive; requires `confirm=true`),
+`capability_publish`, `capability_script_upload` — all driven through the
+node CLI (`iowap-cli capabilities …`, the dashboard store semantics),
+with the T-274 error shape (`{'error': {http_status, detail, raw}}`) on
+CLI/runner failures. Operators gate the whole set per tool name via env
+`IOWAP_ALLOW_CAPS_MANAGE` (csv; unset = allowed — primary/legacy is
+operator context; the per-token `caps:manage` scope arrives with T-035
+P2). The stdio local-agent surface of `iowap-client-mcp` stays the
+curated 9-tool set: this surface is a strict superset (14 via
+`tools/list`).
 
 Local agents (same host as the node) should keep using the stdio package:
 [iowap-client-mcp](https://github.com/iowap-org/iowap-client-mcp).
