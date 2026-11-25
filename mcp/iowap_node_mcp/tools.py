@@ -27,9 +27,13 @@ names; unset/empty = all five allowed) gates the whole set, read per call —
 same semantics as ``IOWAP_ALLOW_CAPS`` for task_submit. Primary/legacy is
 operator context, so the agent-token manage scope defaults to open.
 
-# T-035 P2 hook: per-token scope check — the `caps:manage` flag rides each
-# agent token with T-035 P2; until then the operator env gate above is the
-# only scope check. Attach the per-call token scope here when it lands.
+T-035 P2: per-token scope check on top of the operator env gate — an
+agent-token caller (identity from the T-035 auth context) needs its
+``caps_manage`` flag in ``agents.json``; the primary bearer always passes
+(operator context, flag rides no file). A denied agent gets the T-274
+error shape ``{'error': {'http_status': None, 'detail': ..., 'raw':
+'restricted for this token'}}`` from the tool result — the other tools of
+the surface are unaffected (no session abort).
 """
 
 from __future__ import annotations
@@ -41,6 +45,9 @@ from typing import Any
 
 from iowap_client_mcp.nodecli import NodeCliError, run_node_cli
 from iowap_client_mcp.tools import _relay_error_result
+
+from . import agent_tokens
+from .agent_tokens import PRIMARY_SUBJECT, current_identity
 
 __all__ = [
     "MANAGE_TOOLS",
@@ -99,17 +106,46 @@ def _allowed_manage_tools() -> set[str] | None:
 
 
 def _manage_gate(tool_name: str) -> None:
-    """Raise when the tool is excluded by the operator manage allowlist.
-
-    # T-035 P2 hook: the per-token ``caps:manage`` scope check lands here
-    # when T-035 P2 ships; today the operator env gate is the sole scope.
-    """
+    """Raise when the tool is excluded by the operator manage allowlist."""
     allowed = _allowed_manage_tools()
     if allowed and tool_name not in allowed:
         raise ValueError(
             f"capability manage tool {tool_name!r} not in {NODE_MANAGE_ENV} "
             f"allowlist — operator-set manage tools: {sorted(allowed)}"
         )
+
+
+def _agent_scope_gate(tool_name: str) -> dict[str, Any] | None:
+    """T-035 P2: deny ``capability_*`` to agent tokens without caps_manage.
+
+    The identity comes from the per-request auth context (server-minted
+    subject — not forgeable). ``primary``/no-request identities pass (the
+    operator env keep being the only gate); a non-manage agent gets the
+    T-274 error shape as the tool result, no raise — the other tools of
+    the surface stay usable.
+    """
+    identity = current_identity()
+    if identity == PRIMARY_SUBJECT:
+        return None
+    if agent_tokens.caps_manage_for(identity):
+        return None
+    return {
+        "error": {
+            "http_status": None,
+            "detail": (
+                f"capability {tool_name} is restricted for this token — "
+                "the operator has not enabled caps_manage for this agent "
+                "(dashboard: Agent-Tokens → Allow caps-manage)"
+            ),
+            "raw": "restricted for this token (caps_manage off)",
+        }
+    }
+
+
+def _check_scope(tool_name: str) -> dict[str, Any] | None:
+    """Combined gate: operator env allowlist, then the T-035 token scope."""
+    _manage_gate(tool_name)
+    return _agent_scope_gate(tool_name)
 
 
 def _validate_str(name: str, value: Any) -> str:
@@ -171,7 +207,9 @@ async def capability_create(fields: dict[str, Any]) -> dict[str, Any]:
     first"). Returns the entry summary {name, version, published}; CLI
     failures come back as ``{'error': {...}}`` (T-274).
     """
-    _manage_gate("capability_create")
+    denied = _check_scope("capability_create")
+    if denied is not None:
+        return denied
     if not isinstance(fields, dict):
         raise TypeError("fields must be a JSON object (dict)")
     name = _validate_str("name", fields.get("name"))
@@ -194,7 +232,9 @@ async def capability_update(name: str, fields: dict[str, Any]) -> dict[str, Any]
     Pass ``publish: true`` to also add the capability to the bridge
     allowlist. Returns the entry summary; failures as T-274 error result.
     """
-    _manage_gate("capability_update")
+    denied = _check_scope("capability_update")
+    if denied is not None:
+        return denied
     name = _validate_str("name", name)
     if not isinstance(fields, dict):
         raise TypeError("fields must be a JSON object (dict)")
@@ -226,7 +266,9 @@ async def capability_delete(name: str, confirm: bool) -> dict[str, Any]:
     Destructive; requires ``confirm=true`` (refuses to spawn otherwise).
     Returns {ok, name, deleted}; failures as T-274 error result.
     """
-    _manage_gate("capability_delete")
+    denied = _check_scope("capability_delete")
+    if denied is not None:
+        return denied
     if confirm is not True:
         raise ValueError(
             "capability_delete is destructive — set confirm=true to remove "
@@ -251,7 +293,9 @@ async def capability_publish(name: str, published: bool = True) -> dict[str, Any
     ``capability_update(name, {…, 'publish': true})`` instead when the edit
     itself should publish. Failures as T-274 error result.
     """
-    _manage_gate("capability_publish")
+    denied = _check_scope("capability_publish")
+    if denied is not None:
+        return denied
     if not isinstance(published, bool):
         raise TypeError("published must be a boolean")
     name = _validate_str("name", name)
@@ -274,7 +318,9 @@ async def capability_script_upload(script_name: str, content: str) -> dict[str, 
     Returns {ok, stored (workspace-relative), stored_name, name (slug),
     command (default argv template)}; failures as T-274 error result.
     """
-    _manage_gate("capability_script_upload")
+    denied = _check_scope("capability_script_upload")
+    if denied is not None:
+        return denied
     script_name = _validate_str("script_name", script_name)
     if "/" in script_name or "\\" in script_name or ".." in script_name:
         raise ValueError("script_name must be a bare filename (no path segments)")

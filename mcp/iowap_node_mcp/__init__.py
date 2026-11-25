@@ -5,4 +5,4 @@ iowap-client-mcp library and extended locally with the T-042
 capability-manage tools (5 node-surface-only management tools over the
 node CLI). See iowap_node_mcp.server for details."""
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
