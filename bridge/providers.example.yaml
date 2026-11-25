@@ -1,0 +1,80 @@
+# iowap-bridge-daemon — example provider registry (board T-019).
+#
+# Location: <configdir>/iowap-bridge/providers.yaml (Windows: %AppData%\iowap-bridge\providers.yaml)
+# Override: IOWAP_PROVIDERS_FILE=/path/to/providers.yaml
+#
+# A missing or empty file is fine: the daemon then serves an empty manifest
+# (no capabilities). A broken file (bad YAML, unknown type, missing required
+# fields) makes the daemon refuse to start — loud, not silent.
+#
+# Every entry becomes one manifest capability (SPEC §3). Fields:
+#   name     — capability name, must match ^[a-z][a-z0-9_.-]{1,63}$
+#              (the node publishes it with the "host." prefix).
+#   type     — comfyui | http | process
+#   summary  — free-text manifest summary (optional)
+#   long_run — true for tasks that may run minutes+ (optional)
+#   input_schema — JSON Schema for the params object (optional; a bare
+#              object schema is published otherwise)
+#   workspace — optional subdirectory of the daemon workspace this
+#              provider's tasks run in (artifacts land there)
+#   max_parallel — concurrent exec slots the node may use for this
+#              capability (optional; missing/0/negative → 1)
+#   cost      — scheduling point cost per task (optional; missing/0/
+#              negative → 1)
+
+providers:
+
+  # ── ComfyUI (built-in type) ──────────────────────────────────────────────
+  # The built-in ComfyUI integration as a configurable case. Capability
+  # name defaults to "comfy.generate". Health probes GET / (with a
+  # /system_stats fallback); a failed start_cmd launch waits up to 90 s for
+  # ComfyUI to become healthy.
+  #
+  # - type: comfyui
+  #   url: http://127.0.0.1:8188
+  #   start_cmd: "C:/ComfyUI/run_nvidia_gpu.bat"   # optional start-on-demand
+  #   workspace: comfy                             # optional artifact subdirectory
+  #   long_run: true
+  #   summary: "Generate images with the local ComfyUI installation"
+
+  # ── Generic REST provider ────────────────────────────────────────────────
+  # Any HTTP endpoint becomes a capability. {{param}} placeholders (plus
+  # {{task_id}}) are substituted in url_template, header values and
+  # body_template. result_path selects the response field that becomes the
+  # exec result (dot path; empty = the whole response object). Each
+  # artifact_paths entry is a dot path to a workspace-relative file path
+  # string in the response.
+  #
+  # - name: render.doc
+  #   type: http
+  #   health_url: http://127.0.0.1:9000/health     # optional; 2xx = ok
+  #   long_run: true
+  #   summary: "Render a document via the local render service"
+  #   input_schema:
+  #     type: object
+  #     properties:
+  #       file: { type: string, description: "file to render" }
+  #     required: [file]
+  #   exec:
+  #     method: POST
+  #     url_template: "http://127.0.0.1:9000/api/{{task_id}}/render"
+  #     headers:
+  #       X-Api-Key: "local-secret"
+  #     body_template: '{"file": "{{file}}", "quality": "high"}'
+  #     result_path: result
+  #     artifact_paths: ["result.output_path"]
+
+  # ── Process provider (runs a host command) ────────────────────────────────
+  # SECURITY: this type executes arbitrary local commands with the daemon's
+  # privileges — every entry is a deliberate decision by the daemon
+  # operator. Params are substituted into the argv templates ({{param}},
+  # {{task_id}}) AND piped to the process stdin as JSON (stdin_json: false
+  # disables the pipe). Files matching artifacts_glob (workspace-relative)
+  # become artifacts.
+  #
+  # - name: script.cleanup
+  #   type: process
+  #   command: ["python", "C:/scripts/cleanup.py", "--target", "{{target}}"]
+  #   stdin_json: true
+  #   artifacts_glob: "out/*.png"
+  #   summary: "Run the cleanup script"
