@@ -7,6 +7,13 @@ bootstrap into this repo follows as its own task. The universal-node
 compose profile lives in iowap-org/iowap-docker (storage pattern —
 `universal-node/docker-compose.yml`).
 
+**Distribution:** iowap-node-mcp is **not published on PyPI** — the code is
+baked into the universal-node image via the `universal-node/mcp/` gitlink in
+iowap-org/iowap-docker (storage pattern; the authoritative source stays this
+repo). The version lives in `mcp/pyproject.toml`; only the release step was
+dropped (owner call 2026-11-25). Local-agent packages keep the PyPI path
+(`iowap-client-mcp` etc.).
+
 ## Layout
 
 | Path    | What lives here |
@@ -16,8 +23,6 @@ compose profile lives in iowap-org/iowap-docker (storage pattern —
 The universal-node compose profile (which runs the
 ghcr.io/iowap-org/iowap-universal-node image built from `mcp/`) lives in
 [iowap-org/iowap-docker](https://github.com/iowap-org/iowap-docker) under
-`universal-node/` (storage service-dir pattern, T-037).
-
-Releases: `wheel-v<version>` tags publish only the `mcp/` package wheel;
-the node image itself continues to be built/published from
-iowap-org/iowap-docker (base image `ghcr.io/iowap-org/iowap-node-base`).
+`universal-node/` (storage service-dir pattern, T-037). CI here runs the
+`mcp/` pytest suite (pr-tests); there is no wheel-publish workflow — the
+image build is the release.
