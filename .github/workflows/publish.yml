@@ -1,0 +1,115 @@
+name: Publish to PyPI
+
+# Publishes the iowap-node-mcp wheel (built from mcp/) to PyPI whenever a
+# wheel-v* tag is pushed or the workflow is manually dispatched for one
+# (e.g. tag: wheel-v0.1.0). The package source lives in mcp/ of this repo
+# (T-037 universal-node layout), so every build/guard step runs with
+# working-directory mcp and the guard reads mcp/pyproject.toml.
+# The paths filter scopes the workflow to the package directory; note that
+# GitHub ignores `paths` for tag-push events — the wheel-v* + version guard
+# below is the hard gate, the filter documents intent.
+# Pipeline shape mirrors iowap-org/iowap-node T-228 / client-mcp publish:
+# build the wheel, guard tag-vs-version parity, twine check, then the
+# idempotent token upload.
+#
+# Idempotency (same rule as node's publish-pypi job): PyPI versions are
+# immutable, so an intentional re-run for an already-published version hits
+# "File already exists" — that means 'published successfully earlier' and is
+# treated as success instead of turning the run red.
+#
+# Skip behavior: when the PYPI_TOKEN repo secret is missing, the upload step
+# does NOT fail — it skips with a notice and leaves the wheel as a run
+# artifact, so the pipeline reads "wheel built, upload not configured"
+# instead of red noise.
+
+on:
+  push:
+    tags:
+      - "wheel-v*"
+    paths:
+      - "mcp/**"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Wheel tag to publish (e.g. wheel-v0.1.0)"
+        required: false
+        default: "wheel-v0.1.0"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # tag push → the pushed tag; manual dispatch → the chosen tag input
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel (only the wheel — no sdist)
+        working-directory: mcp
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist/
+
+      - name: Guard — wheel-v* tag must match mcp/pyproject.toml version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${DISPATCH_TAG:-$REF_NAME}"
+          echo "Publishing for tag: $TAG"
+          case "$TAG" in
+            wheel-v*)
+              VER=$(python -c "import tomllib; print(tomllib.load(open('mcp/pyproject.toml','rb'))['project']['version'])")
+              echo "mcp/pyproject.toml version: $VER"
+              if [ "$TAG" != "wheel-v$VER" ]; then
+                echo "::error::tag $TAG does not match package version $VER (expected wheel-v$VER)"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::not a wheel-v* tag: $TAG"
+              exit 1
+              ;;
+          esac
+
+      - name: twine check
+        working-directory: mcp
+        run: |
+          python -m pip install --quiet twine
+          python -m twine check dist/*.whl
+          ls -la dist/
+
+      - name: Upload wheel as run artifact (always, also when publish is skipped)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-wheel
+          path: mcp/dist/*.whl
+
+      - name: Publish to PyPI (idempotent)
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        working-directory: mcp
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet twine
+          if [ -z "$PYPI_TOKEN" ]; then
+            echo "::notice::PYPI_TOKEN secret not set on $GITHUB_REPOSITORY — skipping publish. The wheel is kept as a run artifact; PyPI stays unchanged. To enable: gh secret set PYPI_TOKEN -R $GITHUB_REPOSITORY"
+            exit 0
+          fi
+          export TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_TOKEN"
+          if ! twine upload --non-interactive dist/*.whl | tee /tmp/twine.log; then
+            if grep -qi "already exists" /tmp/twine.log; then
+              echo "Version already on PyPI — idempotent re-run, treated as success"
+              exit 0
+            fi
+            exit 1
+          fi
