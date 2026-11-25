@@ -20,7 +20,7 @@ import (
 const GitHubRepo = "iowap-org/iowap-bridge-daemon"
 
 // NodeImage is the universal-node image the vendored compose profile runs.
-const NodeImage = "ghcr.io/iowap-org/iowap-node-base:latest"
+const NodeImage = "ghcr.io/iowap-org/iowap-universal-node:latest"
 
 // UpdateAvailable reports whether the latest release tag is newer than
 // the running version (semantic version comparison; a "v" prefix is

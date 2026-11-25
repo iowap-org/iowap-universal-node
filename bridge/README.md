@@ -129,7 +129,7 @@ image digest.
 * **Check for updates** — informational only in v1 (nothing is
   downloaded or executed):
   * container image: the local repo digest (`ghcr.io/iowap-org/
-    iowap-node-base`) vs. the registry's current digest (registry v2
+    iowap-universal-node`) vs. the registry's current digest (registry v2
     API, anonymous pull token);
   * the exe: the daemon's own version vs. the GitHub latest release of
     `iowap-org/iowap-bridge-daemon`.

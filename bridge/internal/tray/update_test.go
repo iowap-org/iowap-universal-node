@@ -122,7 +122,7 @@ func TestRemoteImageDigestMissingHeader(t *testing.T) {
 
 // The ghcr.io URL builder: image ref → registry + token endpoints.
 func TestRegistryEndpointsForGHCR(t *testing.T) {
-	reg, repo, tag, err := parseImageRef("ghcr.io/iowap-org/iowap-node-base:latest")
+	reg, repo, tag, err := parseImageRef("ghcr.io/iowap-org/iowap-universal-node:latest")
 	if err != nil {
 		t.Fatalf("parseImageRef: %v", err)
 	}
@@ -132,10 +132,10 @@ func TestRegistryEndpointsForGHCR(t *testing.T) {
 	if !strings.Contains(reg.TokenURL, "https://ghcr.io/token") {
 		t.Errorf("token URL = %q", reg.TokenURL)
 	}
-	if !strings.Contains(reg.TokenURL, "scope=repository:iowap-org/iowap-node-base:pull") {
+	if !strings.Contains(reg.TokenURL, "scope=repository:iowap-org/iowap-universal-node:pull") {
 		t.Errorf("token URL scope missing: %q", reg.TokenURL)
 	}
-	if repo != "iowap-org/iowap-node-base" || tag != "latest" {
+	if repo != "iowap-org/iowap-universal-node" || tag != "latest" {
 		t.Errorf("repo/tag = %q/%q", repo, tag)
 	}
 }
@@ -146,13 +146,13 @@ func TestLocalImageDigest(t *testing.T) {
 		in   []string
 		want string
 	}{
-		{[]string{"ghcr.io/iowap-org/iowap-node-base@sha256:aaa"}, "sha256:aaa"},
-		{[]string{"other@sha256:bbb", "ghcr.io/iowap-org/iowap-node-base@sha256:aaa"}, "sha256:aaa"},
+		{[]string{"ghcr.io/iowap-org/iowap-universal-node@sha256:aaa"}, "sha256:aaa"},
+		{[]string{"other@sha256:bbb", "ghcr.io/iowap-org/iowap-universal-node@sha256:aaa"}, "sha256:aaa"},
 		{nil, ""},
 		{[]string{"malformed"}, ""},
 	}
 	for _, tc := range cases {
-		if got := localImageDigest("ghcr.io/iowap-org/iowap-node-base", tc.in); got != tc.want {
+		if got := localImageDigest("ghcr.io/iowap-org/iowap-universal-node", tc.in); got != tc.want {
 			t.Errorf("localImageDigest(%v) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
