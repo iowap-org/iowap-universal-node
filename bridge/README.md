@@ -132,7 +132,8 @@ image digest.
     iowap-universal-node`) vs. the registry's current digest (registry v2
     API, anonymous pull token);
   * the exe: the daemon's own version vs. the GitHub latest release of
-    `iowap-org/iowap-bridge-daemon`.
+    `iowap-org/iowap-universal-node` (tags `bridge-v*`; foreign tags
+    such as `wheel-v*` in the feed are ignored).
   The result ("update available" / "up to date" / reason it could not
   check) appears as a status line and in the log.
 * **Quit** — confirmation dialog **"Stop the node container too?"**:

@@ -37,25 +37,101 @@ func TestUpdateAvailableMatrix(t *testing.T) {
 	}
 }
 
+// --- T-043: tray update detection on the bridge-v* release channel ----------
+
+// The detection chain as the tray runs it: the GitHub feed's latest tag
+// (bridge-v prefixed) vs. the running version.
+func TestUpdateAvailableBridgeTagMatrix(t *testing.T) {
+	cases := []struct {
+		current, latest string
+		want            bool
+	}{
+		{"0.3.4", "bridge-v0.3.5", true},  // newer bridge tag → update available
+		{"0.3.4", "bridge-v0.3.3", false}, // older bridge tag → no update
+		{"0.3.4", "bridge-v0.3.4", false}, // same version → up to date
+		{"v0.3.4", "bridge-v0.3.5", true}, // v-prefixed running version tolerated as before
+	}
+	for _, tc := range cases {
+		got, err := UpdateAvailable(tc.current, tc.latest)
+		if err != nil {
+			t.Errorf("UpdateAvailable(%q, %q) unexpected err: %v", tc.current, tc.latest, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("UpdateAvailable(%q, %q) = %v, want %v", tc.current, tc.latest, got, tc.want)
+		}
+	}
+}
+
+// The version must be extracted from the tag, prefix stripped: the tray
+// compares/labels with the semantic version behind "bridge-vX.Y.Z".
+func TestParseVersionStripsBridgeTagPrefix(t *testing.T) {
+	v, err := parseVersion("bridge-v0.3.5")
+	if err != nil {
+		t.Fatalf("parseVersion(bridge-v0.3.5): %v", err)
+	}
+	if v.unset || v.major != 0 || v.minor != 3 || v.patch != 5 {
+		t.Fatalf("parseVersion(bridge-v0.3.5) = %+v, want 0.3.5 (not unset)", v)
+	}
+	if upd, err := UpdateAvailable("0.3.4", "bridge-v0.3.5"); err != nil || !upd {
+		t.Fatalf("UpdateAvailable(0.3.4, bridge-v0.3.5) = %v, %v; want true, nil", upd, err)
+	}
+}
+
+// Foreign component prefixes in the repo feed are ignored as update
+// signals: they must never read as an update and never read as a
+// silent "up to date" — unknown state (error) instead.
+func TestUpdateAvailableIgnoresForeignTags(t *testing.T) {
+	for _, latest := range []string{"wheel-v0.1.1", "wheel-v9.9.9"} {
+		got, err := UpdateAvailable("0.3.4", latest)
+		if got {
+			t.Errorf("UpdateAvailable(0.3.4, %q) = true; non-bridge tag must never claim an update", latest)
+		}
+		if err == nil {
+			t.Errorf("UpdateAvailable(0.3.4, %q) = nil error; foreign tag must surface as unknown, not \"up to date\"", latest)
+		}
+	}
+}
+
+// Malformed bridge tags (letters in a segment, empty segment, too many
+// segments) error like today.
+func TestUpdateAvailableMalformedBridgeTags(t *testing.T) {
+	cases := []string{
+		"bridge-vnot-a-version",
+		"bridge-v0.3..4",
+		"bridge-v0.3.4.1",
+	}
+	for _, latest := range cases {
+		if _, err := UpdateAvailable("0.3.4", latest); err == nil {
+			t.Errorf("UpdateAvailable(0.3.4, %q) = nil error, want malformed-tag error", latest)
+		}
+	}
+}
+
 // --- GitHub latest release (exe update check) -------------------------------
 
 func TestLatestReleaseTag(t *testing.T) {
+	// T-043: the tray queries the bridge's new home repo (bridge-v* tags);
+	// the archived iowap-bridge-daemon repo is never consulted.
+	if GitHubRepo != "iowap-org/iowap-universal-node" {
+		t.Fatalf("GitHubRepo = %q, want iowap-org/iowap-universal-node", GitHubRepo)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/iowap-org/iowap-bridge-daemon/releases/latest" {
+		if r.URL.Path != "/repos/"+GitHubRepo+"/releases/latest" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tag_name": "v0.4.0", "name": "v0.4.0"}`))
+		w.Write([]byte(`{"tag_name": "bridge-v0.4.0", "name": "bridge-v0.4.0"}`))
 	}))
 	defer srv.Close()
 
-	tag, err := latestReleaseFrom(context.Background(), srv.Client(), srv.URL, "iowap-org/iowap-bridge-daemon")
+	tag, err := latestReleaseFrom(context.Background(), srv.Client(), srv.URL, GitHubRepo)
 	if err != nil {
 		t.Fatalf("latestReleaseFrom: %v", err)
 	}
-	if tag != "v0.4.0" {
-		t.Fatalf("tag = %q, want v0.4.0", tag)
+	if tag != "bridge-v0.4.0" {
+		t.Fatalf("tag = %q, want bridge-v0.4.0", tag)
 	}
 }
 

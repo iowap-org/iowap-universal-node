@@ -16,16 +16,22 @@ import (
 	"time"
 )
 
-// GitHubRepo is the daemon's own repository (exe update check).
-const GitHubRepo = "iowap-org/iowap-bridge-daemon"
+// GitHubRepo is the daemon's own repository (exe update check). Since the
+// T-039 subtree re-homing the bridge lives in the universal-node repo and
+// release tags carry the bridge-v prefix; the archived iowap-bridge-daemon
+// repo is no longer queried (no fallback).
+const GitHubRepo = "iowap-org/iowap-universal-node"
 
 // NodeImage is the universal-node image the vendored compose profile runs.
 const NodeImage = "ghcr.io/iowap-org/iowap-universal-node:latest"
 
 // UpdateAvailable reports whether the latest release tag is newer than
 // the running version (semantic version comparison; a "v" prefix is
-// tolerated on both sides). Errors surface to the tray status instead of
-// silently claiming "up to date".
+// tolerated on both sides, and the bridge release-tag prefix "bridge-v"
+// is tolerated on the latest tag). Tags without a parsable bridge
+// version (e.g. wheel-v* releases mixed into the repo feed) are ignored
+// as update signals: they surface as an error ("unknown state") to the
+// tray status instead of silently claiming "up to date".
 func UpdateAvailable(current, latest string) (bool, error) {
 	cur, err := parseVersion(current)
 	if err != nil {
@@ -61,6 +67,11 @@ func parseVersion(s string) (version, error) {
 	if s == "" {
 		return version{unset: true}, nil
 	}
+	// bridge release tags are "bridge-vMAJOR.MINOR.PATCH": strip the
+	// channel prefix first, then the plain "v". Any other component
+	// prefix (wheel-v*, ...) keeps its letters and fails numeric
+	// parsing below — defensive: only bridge-v tags are exe updates.
+	s = strings.TrimPrefix(s, "bridge-v")
 	s = strings.TrimPrefix(s, "v")
 	parts := strings.Split(s, ".")
 	if len(parts) == 0 || len(parts) > 3 {
