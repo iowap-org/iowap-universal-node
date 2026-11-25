@@ -1,8 +1,20 @@
+# Bridge release — exe build (windows/linux amd64) + GitHub release + Nextcloud sync.
+#
+# Migrated from iowap-org/iowap-bridge-daemon/.github/workflows/release.yml
+# (T-039 subtree merge, 2026-11-25). Changes vs. the original:
+#   - trigger tag prefix v* -> bridge-v* (collision-free against the mcp/
+#     wheel-v* tags of this repo)
+#   - build steps run with working-directory: bridge/; binaries still land at
+#     the workspace root (asset names and nextcloud-sync layout unchanged)
+#   - workflow_dispatch added: a manual run BUILDS ONLY — release upload and
+#     nextcloud-sync are gated to tag refs (no accidental publish)
+# Requires repo secrets: NEXTCLOUD_HOST / NEXTCLOUD_USERNAME / NEXTCLOUD_PASSWORD.
 name: release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["bridge-v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -25,6 +37,7 @@ jobs:
         with:
           go-version: "1.23"
       - name: Build
+        working-directory: bridge
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -38,10 +51,14 @@ jobs:
           if [ "$GOOS" = "windows" ]; then
             LDFLAGS="$LDFLAGS -H=windowsgui"
           fi
-          go build -trimpath -ldflags "$LDFLAGS" -o iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/iowap-bridge
+          # binary lands at the workspace root: release-asset names and the
+          # nextcloud-sync step consume them exactly like the daemon repo did
+          go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/iowap-bridge
       - name: Checksum
         run: sha256sum iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} > iowap-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}.sha256
       - name: Upload release assets
+        # dispatch runs are build-only smoke tests — no release, no publish
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -52,7 +69,9 @@ jobs:
     # Auto-delivery: mirror the release binaries into the user's Nextcloud
     # (Shared/iowap-bridge/) so the latest exe is always downloadable without
     # a manual copy step. Stable paths, plain PUT overwrites.
+    # Tag-gated: workflow_dispatch must not touch Nextcloud (T-039 gate).
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - name: Download release assets

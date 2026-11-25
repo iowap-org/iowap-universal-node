@@ -1,0 +1,36 @@
+name: bridge tests
+
+# Go gate for the bridge/ subtree (migrated from the iowap-bridge-daemon
+# ci.yml, T-039 subtree merge). Runs on pushes to main and on PRs touching
+# bridge/**: vet + gofmt + test prove the subtree still compiles and its
+# suite is green. The Go toolchain ships in CI — no local go required.
+# exe releases are NOT built here: they ship only on bridge-v* tags via
+# release.yml (build -> GitHub release assets -> nextcloud sync).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "bridge/**"
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: go vet
+        working-directory: bridge
+        run: go vet ./...
+      - name: gofmt
+        working-directory: bridge
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: go test
+        working-directory: bridge
+        run: go test -v ./...
