@@ -41,8 +41,7 @@ history across the subtree merge (merge parents). The old repo is archived —
 this repo is now the single home for bridge code and its release pipeline.
 Daemon contracts stay untouched: the image reference the exe pulls
 (`ghcr.io/iowap-org/iowap-node-base:latest`) lives until the T-040 image flip
-switches it to the universal-node image, and the Nextcloud delivery paths are
-unchanged.
+switches it to the universal-node image.
 
 **Release flow:** a `bridge-vX.Y.Z` tag (only that prefix — the old daemon
 `v*` tags are retired here to stay collision-free against the `wheel-v*`
@@ -51,12 +50,6 @@ tags of the mcp/ era) triggers `release.yml`:
 1. cross-build `iowap-bridge-{windows,linux}-amd64(.exe)` (windowsgui
    subsystem for windows) with sha256sums,
 2. attach the assets to the GitHub release,
-3. mirror them to Nextcloud: stable `Shared/iowap-bridge/` paths (latest,
-   overwrite) plus a per-version archive folder
-   `Shared/iowap-bridge/bridge-vX.Y.Z/` with its own `VERSION.txt` that is
-   never overwritten.
+3. attach the release assets to the GitHub release.
 
-Needs the repo secrets `NEXTCLOUD_HOST` / `NEXTCLOUD_USERNAME` /
-`NEXTCLOUD_PASSWORD`. A manual `workflow_dispatch` run serves as a build-only
-smoke test: it builds both binaries but creates no release and does not
-touch Nextcloud (both publish steps gate on tag refs).
+A manual `workflow_dispatch` run builds both binaries but creates no release.
