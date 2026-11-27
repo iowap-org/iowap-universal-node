@@ -75,15 +75,18 @@ class MultiBearerVerifier:
             )
         entry = self._tokens.verify(token)
         if entry is not None:
+            # T-050 side-finding (ruff F821 → latent NameError): bind the
+            # agent id BEFORE the best-effort touch so a failing store write
+            # logs the id instead of raising inside the except handler.
+            agent_id = str(entry["id"])
             # touch() on every valid agent-token call (T-035 P1b) — best
             # effort, the auth decision is already made (never fail the
             # request over a store write).
             try:
-                self._tokens.touch(str(entry["id"]))
+                self._tokens.touch(agent_id)
             except Exception as exc:  # a failed touch never fails a verified call
                 logging.getLogger(__name__).debug(
                     "agent token touch failed for %s: %s", agent_id, exc)
-            agent_id = str(entry["id"])
             return AccessToken(
                 token=token,
                 client_id=f"iowap-agent:{agent_id}",

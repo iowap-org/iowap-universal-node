@@ -85,3 +85,30 @@ def test_probe_result_is_cached_even_if_access_changes_later(
     volume.chmod(0o555)
     assert at.agents_dir() == volume  # cache, no re-probe mid-process
     volume.chmod(0o755)
+
+
+# ---------------------------------------------------------------------------
+# T-050 side-finding: a failing touch must LOG, not raise (ruff F821 —
+# server.py used `agent_id` in the except block before binding it)
+# ---------------------------------------------------------------------------
+
+
+def test_touch_failure_never_raises_out_of_verify_token(monkeypatch) -> None:
+    import asyncio
+
+    from iowap_node_mcp import server as srv
+
+    def fake_verify(_token: str):
+        return {"id": "agt-feedface"}
+
+    def exploding_touch(_agent_id: str):
+        raise OSError("store gone (the exact store-robustness T-050 worries about)")
+
+    monkeypatch.setattr(at, "verify", fake_verify)
+    monkeypatch.setattr(at, "touch", exploding_touch)
+    verifier = srv.MultiBearerVerifier(primary_token="iw_mcp_primary_only")
+
+    token = asyncio.run(verifier.verify_token("iw_agt_whatever"))
+
+    assert token is not None  # identity decided — best-effort touch swallowed
+    assert token.subject == "agt-feedface"
