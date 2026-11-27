@@ -8,12 +8,16 @@ IDENTICAL JSON contracts (``agents.json`` / ``bindings.json``, same field
 names, same schema) and both package suites pin the same example files, so
 a schema drift breaks one of the suites instead of live traffic.
 
-Storage resolver mirrors the node side exactly:
-``IOWAP_AGENTS_DIR`` env override > the dedicated token volume when it
-exists (``/data/agents``) > ``~/.relay/agents`` fallback (volume-less
-containers stay runnable). Files are read FRESH per call — the dashboard
-and this process both write (last-writer-wins per file, DEC-documented);
-writes go through tmp+os.replace.
+Storage resolver mirrors the node side exactly (T-050 included):
+``IOWAP_AGENTS_DIR`` env override (wins unprobed, per call) > the dedicated
+token volume ``/data/agents`` when it exists AND passes a WRITE probe
+(mkdir + tmp write + unlink — ``os.access()`` alone misses a root-owned
+named volume, which surfaced as ``PermissionError [Errno 13]:
+/data/agents/agents.json.tmp`` in the Ronny-Log 2026-11-27) > the
+``~/.relay/agents`` fallback with a ONE-TIME warning; the resolution is
+cached once per process (probe-once). Files are read FRESH per call — the
+dashboard and this process both write (last-writer-wins per file,
+DEC-documented); writes go through tmp+os.replace.
 
 Identity (T-035 P1b): :func:`current_identity` lifts the SDK access token
 (set by :class:`server.MultiBearerVerifier` in the auth middleware
@@ -37,6 +41,9 @@ VOLUME_AGENT_DIR = Path("/data/agents")
 AGENTS_FILE = "agents.json"
 BINDINGS_FILE = "bindings.json"
 
+# T-050: probe-once per process — mirrors nodes/common/agent_tokens.py.
+_AGENTS_DIR_CACHE: Path | None = None
+
 logger = logging.getLogger("iowap-node-mcp.tokens")
 
 
@@ -46,13 +53,63 @@ logger = logging.getLogger("iowap-node-mcp.tokens")
 
 
 def agents_dir() -> Path:
-    """``IOWAP_AGENTS_DIR`` > ``/data/agents`` (volume present) > ``~/.relay/agents``."""
+    """``IOWAP_AGENTS_DIR`` > ``/data/agents`` (write-probed) > ``~/.relay/agents``.
+
+    T-050: mirrors ``nodes/common/agent_tokens.py`` 1:1 (no import) — the
+    volume candidate must pass a real write probe (``mkdir`` + tmp write +
+    unlink; ``os.access()`` alone misses a root-owned named volume).
+    Unwritable → relay-dir fallback with a one-time warning, and the whole
+    resolution is cached on first call (probe-once per process — a later
+    chown needs a process restart). The env override wins unprobed, per
+    call (tests, exotic installs).
+    """
     override = os.environ.get("IOWAP_AGENTS_DIR", "").strip()
     if override:
         return Path(override)
-    if VOLUME_AGENT_DIR.is_dir():
+    global _AGENTS_DIR_CACHE
+    if _AGENTS_DIR_CACHE is None:
+        _AGENTS_DIR_CACHE = _resolve_agents_dir()
+    return _AGENTS_DIR_CACHE
+
+
+def _resolve_agents_dir() -> Path:
+    """Volume dir if a real write probe passes; relay-dir fallback otherwise."""
+    if VOLUME_AGENT_DIR.is_dir() and _dir_accepts_writes(VOLUME_AGENT_DIR):
         return VOLUME_AGENT_DIR
+    fallback = _relay_fallback_dir()
+    logger.warning(
+        "agents store: %s not writable — using relay-dir fallback %s",
+        VOLUME_AGENT_DIR, fallback,
+    )
+    return fallback
+
+
+def _relay_fallback_dir() -> Path:
+    """``~/.relay/agents`` — volume-less containers and probe failures."""
     return Path.home() / ".relay" / "agents"
+
+
+def _dir_accepts_writes(path: Path) -> bool:
+    """T-050 write probe: actually ``mkdir`` + write + unlink a tmp file.
+
+    ``os.access()`` is not trustworthy here (root-owned dirs report odd
+    outcomes; ACLs are invisible to it) — the probe does what the store
+    itself would do, so the resolver sees the exact failure mode.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / f".iowap-write-probe-{os.getpid()}"
+        probe.write_text("probe", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _reset_agents_dir_cache() -> None:
+    """Test seam: forget the probe-once resolution (next call re-probes)."""
+    global _AGENTS_DIR_CACHE
+    _AGENTS_DIR_CACHE = None
 
 
 def agents_path() -> Path:
