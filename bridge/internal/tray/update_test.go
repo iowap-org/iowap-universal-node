@@ -236,7 +236,7 @@ func TestLocalImageDigest(t *testing.T) {
 
 // --- Image update decision ---------------------------------------------------
 
-func TestImageUpdateAvailable(t *testing.T) {
+func TestUpgradePending(t *testing.T) {
 	cases := []struct {
 		name        string
 		repoDigests []string
@@ -250,7 +250,7 @@ func TestImageUpdateAvailable(t *testing.T) {
 		{"no remote digest", []string{"ghcr.io/x@sha256:aaa"}, "", false, true},
 	}
 	for _, tc := range cases {
-		got, err := ImageUpdateAvailable("ghcr.io/x", tc.repoDigests, tc.remote)
+		got, err := UpgradePending("ghcr.io/x", tc.repoDigests, tc.remote)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("%s: err = %v, wantErr %v", tc.name, err, tc.wantErr)
 		}

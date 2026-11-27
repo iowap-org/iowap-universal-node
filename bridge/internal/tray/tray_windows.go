@@ -18,6 +18,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/iowap-org/iowap-bridge-daemon/internal/openbrowser"
+	"github.com/iowap-org/iowap-bridge-daemon/internal/upgrade"
 )
 
 // Run blocks in the systray event loop. Call from a goroutine.
@@ -49,6 +50,12 @@ func onReady(app App, icon []byte) {
 	mDashboard := systray.AddMenuItem("Open Dashboard", "Open the node dashboard in your browser")
 	mRestart := systray.AddMenuItem("Restart docker container", "Restart the universal-node container (tokens preserved)")
 	mUpdate := systray.AddMenuItem("Check for updates", "Check the container image and this exe for updates")
+	mUpgrade := systray.AddMenuItem("Node upgrade…", "Pull the latest universal-node image and recreate the container (asks first; registration, tokens and workspace survive)")
+	// Board T-049: the action exists from this exe on, enabled only when
+	// the digest diff is confirmed (check at tray start + on every
+	// manual "Check for updates" + after a finished upgrade — no remote
+	// polling in the refresh ticker).
+	mUpgrade.Disable()
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Exit the daemon (asks whether to stop the node container too)")
 
@@ -85,12 +92,30 @@ func onReady(app App, icon []byte) {
 	}()
 	go func() {
 		for range mUpdate.ClickedCh {
-			clickUpdate(ctx, app, statusItems)
+			clickUpdate(ctx, app, statusItems, mUpgrade)
+		}
+	}()
+	go func() {
+		for range mUpgrade.ClickedCh {
+			clickUpgrade(ctx, app, statusItems, mUpgrade)
 		}
 	}()
 	go func() {
 		for range mQuit.ClickedCh {
 			clickQuit(app)
+		}
+	}()
+
+	// One registry check at tray start decides the upgrade menu state:
+	// pending diff → the item enables; every other state keeps it
+	// disabled (fail-closed: an unknown state never enables the action).
+	go func() {
+		pending, err := checkUpgradePending(ctx, app)
+		switch {
+		case err != nil:
+			log.Printf("iowap-bridge: tray: upgrade menu stays disabled (%v)", err)
+		case pending:
+			mUpgrade.Enable()
 		}
 	}()
 }
@@ -126,8 +151,9 @@ func clickRestart(ctx context.Context, app App, items []*systray.MenuItem) {
 }
 
 // clickUpdate runs both update checks and reports via the status line
-// (v1 is informational only — nothing is downloaded or executed).
-func clickUpdate(ctx context.Context, app App, items []*systray.MenuItem) {
+// (v1 is informational only for the EXE — nothing is downloaded). The
+// image check also flips the upgrade menu's enable state (board T-049).
+func clickUpdate(ctx context.Context, app App, items []*systray.MenuItem, mUpgrade *systray.MenuItem) {
 	setStatus(items, 1, "Update check…")
 
 	report := func(line string) { setStatus(items, 1, line); log.Printf("iowap-bridge: tray: %s", line) }
@@ -140,12 +166,16 @@ func clickUpdate(ctx context.Context, app App, items []*systray.MenuItem) {
 			imageLine = "Image: check failed (" + err.Error() + ")"
 		} else if remote, err := RemoteImageDigest(ctx, app.HTTPClient, app.ImageRef); err != nil {
 			imageLine = "Image: check failed (" + err.Error() + ")"
-		} else if upd, err := ImageUpdateAvailable(digestRepo(app.ImageRef), local, remote); err != nil {
+		} else if upd, err := UpgradePending(digestRepo(app.ImageRef), local, remote); err != nil {
 			imageLine = "Image: unknown state (" + err.Error() + ")"
+			// Fail-closed: an unknown state never enables the action.
+			mUpgrade.Disable()
 		} else if upd {
 			imageLine = "Image: UPDATE AVAILABLE"
+			mUpgrade.Enable()
 		} else {
 			imageLine = "Image: up to date"
+			mUpgrade.Disable()
 		}
 	}
 
@@ -162,6 +192,117 @@ func clickUpdate(ctx context.Context, app App, items []*systray.MenuItem) {
 	}
 
 	report("Update: " + imageLine + " — " + exeLine)
+}
+
+// checkUpgradePending runs the fresh digest check behind the upgrade
+// gate: the local repo digests vs. the registry's current digest.
+func checkUpgradePending(ctx context.Context, app App) (bool, error) {
+	if app.RepoDigestsOf == nil {
+		return false, fmt.Errorf("no image inspector configured")
+	}
+	local, err := app.RepoDigestsOf(ctx, app.ImageRef)
+	if err != nil {
+		return false, err
+	}
+	remote, err := RemoteImageDigest(ctx, app.HTTPClient, app.ImageRef)
+	if err != nil {
+		return false, err
+	}
+	return UpgradePending(digestRepo(app.ImageRef), local, remote)
+}
+
+// clickUpgrade is the manual node upgrade (board T-049, T-023 quit
+// pattern): fresh digest check → confirm dialog (registration, agent
+// tokens and the workspace survive the recreate; running MCP sessions
+// are interrupted) → atomic pull+recreate steps on the SAME compose
+// execution path the bootstrap uses. A failed pull never reaches the
+// recreate — the running container stays untouched.
+func clickUpgrade(ctx context.Context, app App, items []*systray.MenuItem, mUpgrade *systray.MenuItem) {
+	report := func(line string) { setStatus(items, 1, line); log.Printf("iowap-bridge: tray: %s", line) }
+
+	if app.UpgradeEnv == nil || len(app.ComposeProfile) == 0 || app.RepoDigestsOf == nil {
+		report("Node upgrade: not available in this daemon (no compose profile / token resolver)")
+		return
+	}
+
+	report("Node upgrade: checking image state…")
+	local, err := app.RepoDigestsOf(ctx, app.ImageRef)
+	if err != nil {
+		report("Node upgrade: image check failed (" + err.Error() + ")")
+		return
+	}
+	remote, err := RemoteImageDigest(ctx, app.HTTPClient, app.ImageRef)
+	if err != nil {
+		report("Node upgrade: image check failed (" + err.Error() + ")")
+		return
+	}
+	pending, err := UpgradePending(digestRepo(app.ImageRef), local, remote)
+	switch {
+	case err != nil:
+		report("Node upgrade: unknown state (" + err.Error() + ")")
+		return
+	case !pending:
+		mUpgrade.Disable()
+		report("Node upgrade: image up to date — nothing to do")
+		return
+	}
+	mUpgrade.Enable()
+
+	ran, err := HandleUpgrade(
+		func() bool {
+			return confirmDialog(
+				"Upgrade the node container?",
+				"Pull the latest universal-node image and recreate the container?\n\n"+
+					"Registration, agent tokens and the workspace survive the recreate.\n"+
+					"Running MCP sessions will be interrupted.\n\nContinue?",
+			)
+		},
+		func(ctx context.Context) error {
+			env, err := app.UpgradeEnv(ctx)
+			if err != nil {
+				return fmt.Errorf("resolving container tokens for the recreate: %w", err)
+			}
+			plan, err := upgrade.PlanFor(digestRepo(app.ImageRef),
+				localImageDigest(digestRepo(app.ImageRef), local), remote)
+			if err != nil {
+				return err
+			}
+			runner := upgrade.CLI{Profile: app.ComposeProfile}
+			return upgrade.Run(
+				ctx, env, plan, runner,
+				func(msg string) { report(msg) },
+				func(msg string) { log.Printf("iowap-bridge: upgrade: %s", msg) },
+			)
+		},
+	)
+	if !ran {
+		// The confirm gate answered no: no compose call happened.
+		report("Node upgrade cancelled — nothing changed")
+		return
+	}
+	if err != nil {
+		report("Node upgrade FAILED: " + err.Error())
+		alertDialog("Upgrade failed",
+			err.Error()+"\n\nA failed pull left the running container in place —"+
+				" the daemon log has the details.")
+		return
+	}
+
+	// Success: the fresh local digest is the upgrade proof; the menu
+	// flips off unless the registry already moved on again.
+	if fresh, err := app.RepoDigestsOf(ctx, app.ImageRef); err != nil {
+		report("Node upgrade done (digest unknown: " + err.Error() + ")")
+	} else {
+		if pending, err := UpgradePending(digestRepo(app.ImageRef), fresh, remote); err == nil {
+			if pending {
+				mUpgrade.Enable()
+			} else {
+				mUpgrade.Disable()
+			}
+		}
+		report("Node upgrade done — image now " + shortenDigest(localImageDigest(digestRepo(app.ImageRef), fresh)))
+	}
+	refreshStatus(ctx, app, items)
 }
 
 func clickQuit(app App) {
@@ -234,16 +375,31 @@ func confirmDialog(title, text string) bool {
 		mbIconQuest = 0x20
 		idYes       = 6
 	)
+	return windowsMessageBox(text, title, mbYesNo|mbIconQuest) == idYes
+}
+
+// alertDialog shows the Windows MessageBox OK dialog — the upgrade
+// failure surface (board T-049): the per-step chatter lives in the tray
+// status + daemon log, the clean failure message is the modal.
+func alertDialog(title, text string) {
+	const (
+		mbOK      = 0x00
+		mbIconErr = 0x10
+	)
+	windowsMessageBox(text, title, mbOK|mbIconErr)
+}
+
+func windowsMessageBox(text, title string, flags int) uintptr {
 	user32 := windows.NewLazySystemDLL("user32.dll")
 	proc := user32.NewProc("MessageBoxW")
 	titlePtr, err := windows.UTF16PtrFromString(title)
 	if err != nil {
-		return false
+		return 0
 	}
 	textPtr, err := windows.UTF16PtrFromString(text)
 	if err != nil {
-		return false
+		return 0
 	}
-	ret, _, _ := proc.Call(0, uintptr(unsafe.Pointer(textPtr)), uintptr(unsafe.Pointer(titlePtr)), mbYesNo|mbIconQuest)
-	return ret == idYes
+	ret, _, _ := proc.Call(0, uintptr(unsafe.Pointer(textPtr)), uintptr(unsafe.Pointer(titlePtr)), uintptr(flags))
+	return ret
 }

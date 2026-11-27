@@ -20,7 +20,7 @@ import (
 )
 
 // Version is the daemon version reported in the manifest.
-const Version = "0.3.8"
+const Version = "0.3.9"
 
 // ProviderName is the manifest provider name.
 const ProviderName = "iowap-bridge"

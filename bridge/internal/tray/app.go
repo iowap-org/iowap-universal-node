@@ -20,4 +20,16 @@ type App struct {
 	Shutdown func()
 	// HTTPClient is used for dashboard/update probes (nil → default).
 	HTTPClient *http.Client
+	// ComposeProfile is the vendored universal-node compose profile
+	// (bootstrap.Profile()): the exact bytes the daemon executed at
+	// bootstrap, re-executed by the upgrade action (board T-049) —
+	// never a second, drifting copy.
+	ComposeProfile []byte
+	// UpgradeEnv resolves the compose interpolation env for the
+	// recreate (board T-049): current container tokens (tokenres: env
+	// override → container inspect → generate, identical to the
+	// bootstrap resolution) + the workspace dir. Nil disables the
+	// upgrade action. The env carries secrets — it is compose-only and
+	// is never logged.
+	UpgradeEnv func(ctx context.Context) (map[string]string, error)
 }

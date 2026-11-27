@@ -18,3 +18,10 @@ func confirmDialog(title, text string) bool {
 	log.Printf("iowap-bridge: %s: %s (no dialog on this platform — answering no)", title, text)
 	return false
 }
+
+// alertDialog has no portable implementation on non-Windows hosts — the
+// daemon log stays the only upgrade-failure surface (the tray package
+// itself is a stub here anyway).
+func alertDialog(title, text string) {
+	log.Printf("iowap-bridge: %s: %s", title, text)
+}

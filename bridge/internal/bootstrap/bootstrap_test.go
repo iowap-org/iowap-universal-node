@@ -200,3 +200,20 @@ func TestVendoredComposeFileIsTheSourceOfTruth(t *testing.T) {
 		}
 	}
 }
+
+// The tray's node upgrade (board T-049) re-executes the SAME profile as
+// the bootstrap — the accessor must hand out the embedded bytes, never a
+// drifting second copy.
+func TestProfileAccessorIsTheEmbeddedFile(t *testing.T) {
+	if len(Profile()) == 0 {
+		t.Fatal("Profile() must return the embedded compose profile")
+	}
+	if len(Profile()) != len(composeFile) {
+		t.Fatalf("Profile() length = %d, embedded = %d", len(Profile()), len(composeFile))
+	}
+	for i := range composeFile {
+		if Profile()[i] != composeFile[i] {
+			t.Fatalf("Profile() byte %d differs from the embedded file", i)
+		}
+	}
+}

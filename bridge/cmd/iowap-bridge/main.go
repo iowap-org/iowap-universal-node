@@ -188,7 +188,7 @@ func main() {
 
 	// ── Tray icon (T-023, Windows-first): status widget + menu. Best
 	// effort — the daemon serves with or without a working tray.
-	runTray(eng)
+	runTray(eng, workspace)
 
 	ln, err := net.Listen("tcp", cfg.BindAddr())
 	if err != nil {
@@ -238,9 +238,12 @@ func (t trayController) Start(ctx context.Context, name string) error {
 }
 
 // runTray starts the Windows tray icon (board T-023). It runs entirely in
-// a goroutine and is crash-proof: any panic or error is logged, the daemon
-// keeps serving (a missing tray must never take down the bridge).
-func runTray(eng *dockerx.Client) {
+// a goroutine and is crash-proof: any panic or error is logged, the
+// daemon keeps serving (a missing tray must never take down the bridge).
+// board T-049: the tray also receives the vendored compose profile + a
+// tokenres-based UpgradeEnv resolver — the manual node upgrade re-runs
+// the SAME compose pathway with the CURRENT container tokens.
+func runTray(eng *dockerx.Client, workspace string) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -248,10 +251,31 @@ func runTray(eng *dockerx.Client) {
 			}
 		}()
 		tray.Run(tray.App{
-			Ctrl:          trayController{eng: eng},
-			DaemonVersion: server.Version,
-			ImageRef:      tray.NodeImage,
-			RepoDigestsOf: eng.ImageRepoDigests,
+			Ctrl:           trayController{eng: eng},
+			DaemonVersion:  server.Version,
+			ImageRef:       tray.NodeImage,
+			RepoDigestsOf:  eng.ImageRepoDigests,
+			ComposeProfile: bootstrap.Profile(),
+			UpgradeEnv: func(ctx context.Context) (map[string]string, error) {
+				// Same resolution the bootstrap ran (env override →
+				// container inspect → generate): a recreate keeps the
+				// tokens the configured container currently uses.
+				toks, err := tokenres.Resolve(ctx, tokenres.Options{
+					GetEnv:              os.Getenv,
+					ContainerName:       bootstrap.ContainerName,
+					InspectEnv:          eng.InspectEnv,
+					GenerateBridgeToken: provision.GenerateBridgeToken,
+					GenerateBearer:      provision.GenerateBearer,
+				})
+				if err != nil {
+					return nil, err
+				}
+				return map[string]string{
+					"IOWAP_BRIDGE_TOKEN":  toks.BridgeToken,
+					"IOWAP_MCP_BEARER":    toks.MCPBearer,
+					"IOWAP_WORKSPACE_DIR": workspace,
+				}, nil
+			},
 			Shutdown: func() {
 				log.Printf("iowap-bridge: quit requested from the tray")
 				os.Exit(0)

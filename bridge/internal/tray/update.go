@@ -1,8 +1,8 @@
 // Update checks (board T-023): (a) container image — registry digest
 // comparison latest vs. local (docker RepoDigests); (b) the daemon exe —
 // GitHub latest release of the daemon repo vs. the running version.
-// Both are INFORMATIONAL in v1: the tray reports "update available",
-// nothing is downloaded or executed.
+// Detection only in T-023; since board T-049 the image check is also the
+// gate for the tray's manual "Node upgrade…" action (upgrade package).
 package tray
 
 import (
@@ -249,11 +249,12 @@ func localImageDigest(imageRepo string, repoDigests []string) string {
 	return ""
 }
 
-// ImageUpdateAvailable compares the locally pulled digests of imageRepo
-// against the registry's current digest. Unknown states (nothing pulled
-// yet, no remote answer) are errors — the tray shows "cannot check", it
-// never shows a false "up to date".
-func ImageUpdateAvailable(imageRepo string, localRepoDigests []string, remoteDigest string) (bool, error) {
+// UpgradePending (board T-049) is the digest diff that both gates the
+// tray's "Node upgrade…" menu item and decides the click action. Unknown
+// states (nothing pulled yet, no remote answer) are errors — the tray
+// shows "cannot check", it never shows a false "up to date" and it never
+// enables the upgrade action on unknown state.
+func UpgradePending(imageRepo string, localRepoDigests []string, remoteDigest string) (bool, error) {
 	local := localImageDigest(imageRepo, localRepoDigests)
 	if local == "" {
 		return false, fmt.Errorf("no local digest known for %s", imageRepo)

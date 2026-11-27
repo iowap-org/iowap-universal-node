@@ -126,8 +126,8 @@ image digest.
 * **Restart docker container** — stops and starts the
   `iowap-universal-node` container as-is (no recreate, tokens/bearers
   untouched — consistent with the bootstrap's existing-container path).
-* **Check for updates** — informational only in v1 (nothing is
-  downloaded or executed):
+* **Check for updates** — checks both channels, applies nothing
+  automatically:
   * container image: the local repo digest (`ghcr.io/iowap-org/
     iowap-universal-node`) vs. the registry's current digest (registry v2
     API, anonymous pull token);
@@ -136,6 +136,14 @@ image digest.
     such as `wheel-v*` in the feed are ignored).
   The result ("update available" / "up to date" / reason it could not
   check) appears as a status line and in the log.
+* **Node upgrade…** — manual image upgrade (board T-049, v0.3.9;
+  enabled only when the digest check found a change): confirm dialog
+  (registration, agent tokens and the workspace survive the recreate —
+  running MCP sessions are interrupted), then `docker compose pull` and
+  `up -d` on the same vendored compose profile the bootstrap executes.
+  A failed pull leaves the running container untouched (no half-upgraded
+  state); the exe itself is updated separately via the GitHub release
+  channel. No auto-upgrade: the action only fires from this menu.
 * **Quit** — confirmation dialog **"Stop the node container too?"**:
   *Yes* stops the container and exits the daemon; *No* exits the daemon
   and leaves the node running. The daemon exits even when the container

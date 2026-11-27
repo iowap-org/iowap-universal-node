@@ -126,3 +126,64 @@ func TestHandleQuitStopErrorStillQuitsDaemon(t *testing.T) {
 		t.Fatalf("action = %v, want QuitWithContainerStop", action)
 	}
 }
+
+// --- Upgrade confirm gate (board T-049) --------------------------------------
+
+// Abbruch = keine Aktion: a declined dialog never reaches the upgrade —
+// no compose call happens, the image and the running container stay
+// untouched.
+func TestHandleUpgradeCancelPerformsNoAction(t *testing.T) {
+	ran := false
+	run := func(ctx context.Context) error {
+		ran = true
+		return nil
+	}
+	actuated, err := HandleUpgrade(func() bool { return false }, run)
+	if err != nil {
+		t.Fatalf("decline must not surface an error: %v", err)
+	}
+	if actuated {
+		t.Fatal("declined dialog must not actuate the upgrade")
+	}
+	if ran {
+		t.Fatal("confirm gate declined — the upgrade must not have run")
+	}
+}
+
+func TestHandleUpgradeConfirmedRunsUpgrader(t *testing.T) {
+	calls := 0
+	run := func(ctx context.Context) error { calls++; return nil }
+	actuated, err := HandleUpgrade(func() bool { return true }, run)
+	if err != nil {
+		t.Fatalf("confirmed upgrade must surface no error: %v", err)
+	}
+	if !actuated {
+		t.Fatal("confirmed dialog must actuate the upgrade")
+	}
+	if calls != 1 {
+		t.Fatalf("upgrade run count = %d, want exactly 1", calls)
+	}
+}
+
+// A failing upgrade surfaces its error for the tray status line.
+func TestHandleUpgradeErrorSurfaces(t *testing.T) {
+	_, err := HandleUpgrade(func() bool { return true }, func(ctx context.Context) error {
+		return errors.New("docker compose pull failed")
+	})
+	if err == nil {
+		t.Fatal("the upgrade error must surface")
+	}
+}
+
+// A nil confirm (no dialog available) behaves like a decline — the same
+// fail-closed semantics as HandleQuit.
+func TestHandleUpgradeNilConfirmNoAction(t *testing.T) {
+	ran := false
+	actuated, err := HandleUpgrade(nil, func(ctx context.Context) error {
+		ran = true
+		return nil
+	})
+	if err != nil || actuated || ran {
+		t.Fatalf("nil confirm must be a decline: actuated=%v ran=%v err=%v", actuated, ran, err)
+	}
+}

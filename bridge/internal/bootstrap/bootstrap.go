@@ -24,6 +24,13 @@ const ContainerName = "iowap-universal-node"
 //go:embed docker-compose.universal-node.yml
 var composeFile []byte
 
+// Profile returns the vendored compose profile bytes. The tray's node
+// upgrade (board T-049) re-executes exactly this profile — the same
+// blueprint the bootstrap runs, never a second, drifting copy.
+func Profile() []byte {
+	return composeFile
+}
+
 // Engine is the subset of the Docker Engine API the bootstrap needs.
 // Implemented by internal/dockerx; faked in tests.
 type Engine interface {
@@ -142,38 +149,49 @@ func Run(ctx context.Context, eng Engine, opts Options) (Result, error) {
 	return Result{Bearer: opts.MCPBearer}, nil
 }
 
-// ExecCompose is the production RunComposeFunc: it writes the profile to a
-// temp file and runs `docker compose -f <file> up -d` (Docker Desktop ships
-// the compose CLI; if it is missing that is an installation problem, not
-// something the daemon works around).
+// ExecCompose is the production RunComposeFunc for the bootstrap: it
+// runs the profile's whole service set (`docker compose -f <file> up -d`).
 func ExecCompose(ctx context.Context, composeYAML []byte, env map[string]string) error {
+	_, err := ExecComposeSteps(ctx, composeYAML, env, "up", "-d")
+	return err
+}
+
+// ExecComposeSteps runs arbitrary compose verbs for the compose profile
+// (board T-049): `docker compose -f <file> <args…>` — the pull step of
+// the node upgrade uses "pull", a recreate "up -d". Returns the combined
+// command output (the caller logs it into the daemon log; on failure the
+// output rides the error text). Docker Desktop ships the compose CLI —
+// when it is missing that is an installation problem, not something the
+// daemon works around.
+func ExecComposeSteps(ctx context.Context, composeYAML []byte, env map[string]string, args ...string) (string, error) {
 	dockerBin, err := exec.LookPath("docker")
 	if err != nil {
-		return fmt.Errorf("docker CLI not found — install or start Docker Desktop (the compose CLI ships with it)")
+		return "", fmt.Errorf("docker CLI not found — install or start Docker Desktop (the compose CLI ships with it)")
 	}
 
 	f, err := os.CreateTemp("", "iowap-universal-node-*.yml")
 	if err != nil {
-		return fmt.Errorf("writing compose profile: %w", err)
+		return "", fmt.Errorf("writing compose profile: %w", err)
 	}
 	tmpName := f.Name()
 	defer os.Remove(tmpName)
 	if _, err := f.Write(composeYAML); err != nil {
 		f.Close()
-		return fmt.Errorf("writing compose profile: %w", err)
+		return "", fmt.Errorf("writing compose profile: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("writing compose profile: %w", err)
+		return "", fmt.Errorf("writing compose profile: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, dockerBin, "compose", "-f", tmpName, "up", "-d")
+	cmd := exec.CommandContext(ctx, dockerBin, append([]string{"compose", "-f", tmpName}, args...)...)
 	cmd.Env = os.Environ()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
 	if err != nil {
-		return fmt.Errorf("docker compose up failed: %v — output: %s", err, strings.TrimSpace(string(out)))
+		return output, fmt.Errorf("docker compose %s failed: %v — output: %s", strings.Join(args, " "), err, output)
 	}
-	return nil
+	return output, nil
 }

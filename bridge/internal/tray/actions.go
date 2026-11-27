@@ -86,3 +86,17 @@ func HandleQuit(confirm func() bool, ctrl ContainerController, name string) Quit
 	}
 	return QuitWithContainerStop
 }
+
+// HandleUpgrade runs the node upgrade's confirm gate (the T-023 quit
+// pattern, board T-049): the compose actions run ONLY after a confirmed
+// dialog — cancelling performs NO action (no pull, no recreate, the
+// running container is untouched). Confirm is injected like for quit so
+// the gate is testable without a GUI; run is the caller's whole upgrade
+// (digest plan + compose steps); its error is returned for the status
+// line. ran reports whether the upgrade actually ran.
+func HandleUpgrade(confirm func() bool, run func(ctx context.Context) error) (ran bool, err error) {
+	if confirm == nil || !confirm() || run == nil {
+		return false, nil
+	}
+	return true, run(context.Background())
+}
