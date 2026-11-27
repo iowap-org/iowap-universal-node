@@ -310,9 +310,14 @@ comparison).
 }
 ```
 
-`health` is `ok | down`; the ComfyUI health probe runs every 15 s and the
-capability reports `down` after 3 consecutive failed probes (the node
-then stops publishing the capability).
+`health` is `ok | down` and **advisory metadata** (T-048 — the manifest
+is a declaration, not a gate): the ComfyUI health probe runs every 15 s
+and the capability reports `down` after 3 consecutive failed probes, but
+the daemon does **not** gate manifest entries on health — a `down`
+entry stays in the manifest list with its `health` field, and what
+actually gets published is decided by the node (its allowlist, T-045).
+A command that cannot execute still reports an honest exec error at
+run time (SPEC §5 envelope), never a silent success.
 
 ### `POST /v1/exec/{name}`
 

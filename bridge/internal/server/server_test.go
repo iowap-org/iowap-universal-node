@@ -169,7 +169,10 @@ func TestManifestShape(t *testing.T) {
 	}
 }
 
-func TestManifestHealthDown(t *testing.T) {
+// T-048: health is ADVISORY — the manifest is a declaration, not a
+// gate. A health:down entry stays IN the list with its metadata field;
+// only the (non-existing) filtering behavior would drop it.
+func TestManifestHealthDownIsAdvisoryEntryStays(t *testing.T) {
 	p := newComfyStub()
 	p.cap.Health = provider.HealthDown
 	s := newTestServer(t, p)
@@ -404,6 +407,48 @@ func TestExecSpecIgnoresRegistry(t *testing.T) {
 	}
 	if resp.Status != "completed" || resp.Result["stdout"] != "no-registry-needed" {
 		t.Errorf("status/result = %q/%v, want completed/no-registry-needed", resp.Status, resp.Result["stdout"])
+	}
+}
+
+// (T-048) An unresolvable process spec is NOT gated away (the manifest
+// is a declaration) — so the honest failure happens at RUN TIME: the
+// daemon answers 200 with the SPEC §5 error envelope (status failed,
+// provider.unavailable, the real cause text) instead of a silent
+// success. The node's publish decision never saw a health gate, and
+// the task carries the error.
+func TestExecSpecUnresolvableCommandHonestError(t *testing.T) {
+	s := newTestServer(t, newComfyStub())
+	body := `{"task_id":"t-honest","params":{},"timeout_s":10,
+	          "spec":{"type":"process","command":["/definitely/missing/iowap-no-such-binary","run"],"stdin_json":false}}`
+	rec := doReq(t, s, "POST", "/v1/exec/never.resolvable", testToken, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("spec exec = %d, want 200 (SPEC §5 task-envelope, body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Bridge-Exec"); got != "spec" {
+		t.Errorf("X-Bridge-Exec = %q, want spec", got)
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Error  struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			Retryable bool   `json:"retryable"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if resp.Status != "failed" {
+		t.Errorf("status = %q (body: %s), want failed — an unresolvable command must report an honest exec error, not complete", resp.Status, rec.Body.String())
+	}
+	if resp.Error.Code != "provider.unavailable" {
+		t.Errorf("error.code = %q, want provider.unavailable", resp.Error.Code)
+	}
+	if !strings.Contains(resp.Error.Message, "/definitely/missing/iowap-no-such-binary") {
+		t.Errorf("error.message = %q, want the honest cause text (starting <name>: ...)", resp.Error.Message)
+	}
+	if !resp.Error.Retryable {
+		t.Errorf("error.retryable = false, want true (start failure is provider-level, not capability.failed)")
 	}
 }
 

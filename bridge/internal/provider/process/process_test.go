@@ -218,3 +218,42 @@ func TestHealthEmptyCommand(t *testing.T) {
 		t.Errorf("Health = %q, want down", got)
 	}
 }
+
+// T-048 (advisory probe accuracy): a RELATIVE script path resolves
+// against the daemon's process cwd — probe-ok exactly when the file
+// exists there; the health field is advisory metadata either way.
+func TestHealthRelativeScriptResolvesAgainstDaemonCwd(t *testing.T) {
+	needShell(t)
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "scripts"), 0o755); err != nil {
+		t.Fatalf("mkdir scripts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "scripts", "tool.py"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(old)
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	present := New(testConfig([]string{"scripts/tool.py", "--run"}))
+	if got := present.ProbeOnce(context.Background()); got != provider.HealthOK {
+		t.Errorf("ProbeOnce (script present relative to daemon cwd) = %q, want ok", got)
+	}
+
+	// Same entry, but the file is gone → probes down (still only the
+	// advisory field changes; the manifest keeps the entry).
+	absent := New(testConfig([]string{"scripts/tool.py", "--run"}))
+	if err := os.Remove(filepath.Join(tmp, "scripts", "tool.py")); err != nil {
+		t.Fatalf("remove script: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if got := absent.ProbeOnce(context.Background()); got != provider.HealthDown {
+			t.Errorf("probe %d (script gone) = %q, want down", i+1, got)
+		}
+	}
+}

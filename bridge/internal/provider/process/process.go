@@ -106,6 +106,20 @@ func (p *Provider) healthLocked() string {
 	return provider.HealthOK
 }
 
+// commandResolvable reports whether the configured command looks
+// executable on this host. It feeds the (advisory) health field only —
+// it never gates a manifest entry (T-048: health is metadata).
+//
+// Resolution root: this check runs with the DAEMON's process cwd — a
+// relative head like `scripts/tool.py` is os.Stat'ed against the
+// directory the bridge daemon was started from, NOT against the
+// per-exec workspace dir (Exec only chdir's the CHILD via cmd.Dir). A
+// head without any path separator resolves through the daemon's PATH
+// via exec.LookPath. So a manifest entry for a relative script probes
+// ok (health "ok", advisory) exactly when the file exists relative to
+// the daemon cwd — if it is actually meant to live in the workspace,
+// the entry still publishes and a missing script surfaces as an honest
+// exec error at run time, not as a missing capability.
 func (p *Provider) commandResolvable() bool {
 	if len(p.cfg.Command) == 0 {
 		return false

@@ -20,7 +20,7 @@ import (
 )
 
 // Version is the daemon version reported in the manifest.
-const Version = "0.3.7"
+const Version = "0.3.8"
 
 // ProviderName is the manifest provider name.
 const ProviderName = "iowap-bridge"
@@ -160,6 +160,15 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RUnlock()
 
+	// T-048: the manifest is a DECLARATION, not a health gate — every
+	// registry entry is emitted independently of its current Health.
+	// `health` stays in the entry as ADVISORY metadata (the current
+	// probe state; the max-3-failure probe only marks the field — it
+	// never removes the entry from the list). What gets published is
+	// decided by the consumer's own rules (the node allowlist, T-045),
+	// and a command that cannot run reports an honest error at run
+	// time via the SPEC §5 envelope instead of disappearing from the
+	// manifest.
 	capabilities := make([]map[string]any, 0, len(providers))
 	for _, p := range providers {
 		capability := p.Capability()
