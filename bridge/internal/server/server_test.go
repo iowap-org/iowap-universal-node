@@ -544,3 +544,31 @@ func TestExecSpecForwardsParamsAndTaskID(t *testing.T) {
 		t.Errorf("task_id stdout = %v, want t-sf1", second.Result["stdout"])
 	}
 }
+
+// (d2) Unknown body keys never break the legacy path: this is the exact
+// decode behavior that lets a 0.3.7 node send `spec` to a pre-0.3.7
+// daemon — the old exe drops the key and registry-resolves the name.
+func TestExecLegacyToleratesUnknownBodyKeys(t *testing.T) {
+	p := newComfyStub()
+	p.execFn = func(ctx context.Context, taskID string, params json.RawMessage, timeout time.Duration, ws string) (map[string]any, []provider.Artifact, *provider.ExecError) {
+		return map[string]any{"via": "registry"}, nil, nil
+	}
+	s := newTestServer(t, p)
+	rec := doReq(t, s, "POST", "/v1/exec/comfy.generate", testToken,
+		`{"task_id":"t1","params":{},"timeout_s":10,"future_unknown_key":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy exec with unknown key = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Bridge-Exec"); got != "legacy" {
+		t.Errorf("X-Bridge-Exec = %q, want legacy", got)
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if resp.Status != "completed" {
+		t.Errorf("status = %q, want completed", resp.Status)
+	}
+}
